@@ -1,0 +1,66 @@
+{
+  "name": "pi-adversarial-review",
+  "version": "0.1.0",
+  "description": "An adversarial review gate for the pi coding agent: a panel of reviewer agents must clear the exact bits of a changeset before `git commit` runs.",
+  "type": "module",
+  "license": "MIT",
+  "author": "John Fink <johnfink8@gmail.com>",
+  "homepage": "https://github.com/johnfink8/pi-adversarial-review#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnfink8/pi-adversarial-review.git"
+  },
+  "bugs": {
+    "url": "https://github.com/johnfink8/pi-adversarial-review/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "coding-agent",
+    "code-review",
+    "ai-code-review",
+    "adversarial-review",
+    "subagents",
+    "multi-agent",
+    "git",
+    "commit"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src/*.ts",
+    "prompts/*.md",
+    "reviewers/*.md",
+    "moderator/*.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "^1.1.0",
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@earendil-works/pi-tui": "^1.1.0",
+    "@types/node": "^26.6.3",
+    "typebox": "^1.3.27",
+    "typescript": "^7.0.2"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

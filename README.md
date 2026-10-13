@@ -1,0 +1,82 @@
+# pi-adversarial-review
+
+An adversarial review gate for the [pi coding agent](https://github.com/earendil-works/pi). Before `git commit` runs, a panel of reviewer agents reads the exact bits being committed, and any HIGH or MEDIUM finding blocks the commit. A blocked panel goes to a moderator, who either upholds the block or overturns it.
+
+It exists for long autonomous runs: a model working toward a goal for hours commits often, and nothing else reads those commits until a human does.
+
+## What you get
+
+- **`adversarial_review`**, a tool the model calls before committing. It returns the panel's verdict, every finding, and the path of each full report.
+- **A `git commit` gate.** A commit run through bash is blocked unless the panel cleared exactly these bits. A cleared commit gets the panel's report appended to its own tool result.
+- **`/review`** runs the panel by hand. **`/review-skip <reason>`** lets one commit through unreviewed. Only the user can do that, and the model is told it was the user's call.
+- **A system-prompt section** (`prompts/rules.md`) telling the model how to work with the gate: call it before committing, LOWs are advisory, an overturn means commit now without edits, never re-path a change to dodge a reviewer.
+
+## The panel
+
+Five reviewers ship in `reviewers/`. Each owns one lane and is told what its neighbours cover, so findings don't duplicate:
+
+| Reviewer | Hunts |
+|---|---|
+| `assumption-auditor` | Quietly made assumptions: defaults, orderings, unit and locale guesses, "reasonable" magic numbers |
+| `fail-loud-reviewer` | Failures displaced downstream: silent fallbacks, swallowed errors, phantom success |
+| `requirement-fitter` | Whether this commit is a faithful step toward the stated intent, with no unexplained extras and no status claims the diff doesn't back |
+| `type-safety-reviewer` | Type escapes, casts, and types narrower or wider than the data |
+| `code-style-reviewer` | Style in Python and TypeScript: comments that earn their place, naming, organization |
+
+`moderator/` holds the single moderator. It reads every report and rules on the block as a whole.
+
+To use your own panel, put specs in `<agentDir>/review-gate/reviewers/` (and optionally `<agentDir>/review-gate/moderator/`). A directory there **replaces** the bundled one; it does not merge with it. A spec is Markdown with `name`, `description`, optional `tools` and optional `model` frontmatter, and the system prompt as the body. The gate appends the approval protocol (`src/protocol.ts`) that makes each reviewer's output machine-readable.
+
+A panel member without `model:` runs on the session's model at the session's thinking level.
+
+## Requirements
+
+- **An `AGENTS.md` at the repository root.** The gate refuses to run without one. The panel needs to know what the project is, who uses it, its trust model and its stage, or it cannot tell a prototype's acceptable shortcut from a production bug.
+- A git repository. Outside one, the gate steps aside and says so.
+
+## Install
+
+```bash
+pi install npm:pi-adversarial-review
+```
+
+## Configuration
+
+`<agentDir>/review-gate.json`, optional:
+
+```json
+{ "maxConcurrency": 1 }
+```
+
+How many panel members run at once, from 1 to 8. The default is 4. Use 1 for a local endpoint that caches one conversation at a time: concurrent reviewers evict each other's prefix cache, so every one pays a full prefill. The file is read when the extension loads, and an invalid value fails the load rather than falling back to the default.
+
+If `PI_BASH_MAX_TIMEOUT` is set, the gate never raises a cleared commit's bash timeout above it.
+
+## How it works
+
+**Changeset.** The working tree against HEAD, tracked changes and untracked file content, hashed with sha256 (`src/changeset.ts`). The index plays no part: every read goes through a scratch index built from HEAD, so staging never changes the hash or what the panel reads. After a commit, the committed bytes are checked against the reviewed worktree, which catches a stale or partial stage. The patch is written to the record store and handed to reviewers as a path. The reviewed worktree is also written as a git tree object, so two reviews can be diffed exactly.
+
+**Reuse.** A reviewer's PROCEED counts only for the exact changeset hash *and* the exact spec that produced it, so editing a reviewer's prompt invalidates its verdicts. Anything else re-runs, including a prior BLOCK.
+
+**Warm re-reviews.** Each panel member's pi session is kept per HEAD under `<agentDir>/reviews/<repo>/warm/<head>/<agent>/` (`src/warm.ts`). A re-review on the same HEAD resumes that session and is told exactly what changed since its last pass: `git diff <its last tree> <current tree>`. It still judges the whole changeset. A commit moves HEAD, so the first review after it starts cold, and sessions for commits HEAD has moved past are pruned. A spec edit, a gc'd tree or a malformed state file falls back to a cold start and says so. One panel runs per repository at a time.
+
+**Records.** `<agentDir>/reviews/<repo>/<hash>.json` holds each reviewer's verdict, findings, cleared list and the spec hash it answered, with full reports beside it. The store sits outside the working tree on purpose: a record written into the repo would dirty the tree the review just cleared. The latest 25 changesets are kept.
+
+**Panel integrity.** A spec that will not parse, or a stray non-spec file in the panel directory, fails the gate outright rather than dropping that reviewer. "Every reviewer PROCEEDed" is a claim about who was in the room.
+
+**The commit hook.** Every bash command is checked for `git` at a command position with `commit` as its subcommand (`src/commit.ts`). Without a PROCEED for these bits, the reviewers that owe one run, and a BLOCK blocks the call with the full reports attached. After the command, the tree is re-checked, because the verdict was computed before the command ran: a command that writes files and commits in one go is reported as committed on a stale verdict.
+
+Deliberate limits:
+
+- A commit reached through a program that builds its own command (`make commit`, a git alias, a shell nested more than one `-c` deep) is not detected. Matching `commit` anywhere after `git` would gate `git log --grep commit`, and a false positive costs a full panel run. The system prompt tells the model to call the tool itself.
+- The gate reviews only the session's repository. A commit that could land elsewhere (`git -C`, `--git-dir`, `GIT_DIR=`, a `cd` out of the tree) is refused, not cleared.
+
+**Recursion.** Panel members run with `PI_REVIEW_GATE_CHILD=1`, and the gate refuses to run under it, so a reviewer can never start a panel of its own.
+
+## Cost
+
+A cold review runs every reviewer over the whole changeset, which is minutes and real tokens on a large diff. Warm re-reviews read only the delta and are much cheaper. Keep commits small: the panel clears a 5 KiB changeset far more easily than a 200 KiB one.
+
+## License
+
+MIT. `src/runner.ts` is adapted from pi's MIT-licensed subagent example; see `LICENSE`.
