@@ -77,6 +77,22 @@ Deliberate limits:
 
 A cold review runs every reviewer over the whole changeset, which is minutes and real tokens on a large diff. Warm re-reviews read only the delta and are much cheaper. Keep commits small: the panel clears a 5 KiB changeset far more easily than a 200 KiB one.
 
+## Development
+
+```bash
+npm install
+npm run typecheck && npm run lint && npm test
+pi --no-extensions -e ./src/index.ts   # try it in a repository with an AGENTS.md
+```
+
+The tests use temporary git repositories and a temporary pi agent directory. They never call a model.
+
+## Releasing
+
+1. Bump `version` in `package.json` and add a matching `## [x.y.z]` entry to `CHANGELOG.md`.
+2. Merge to `main`.
+3. Publish a GitHub release tagged `vx.y.z`. The `publish` workflow checks the tag against `package.json` and the CHANGELOG, runs the checks, and publishes to npm with provenance.
+
 ## License
 
 MIT. `src/runner.ts` is adapted from pi's MIT-licensed subagent example; see `LICENSE`.

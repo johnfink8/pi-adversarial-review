@@ -1,0 +1,53 @@
+name: publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - run: npm install
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Verify CHANGELOG has an entry for this version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          grep -q "^## \[$PKG_VERSION\]" CHANGELOG.md || { echo "CHANGELOG.md has no ## [$PKG_VERSION] entry"; exit 1; }
+
+      - run: npm publish --provenance --access public
