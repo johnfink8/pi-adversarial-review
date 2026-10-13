@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { describeError } from "./util.ts";
+import { describeError, isRecord } from "./util.ts";
 
 const PACKAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -127,10 +127,33 @@ function loadSpecsFromDir(dir: string, source: SpecSource, skipped: SkippedAgent
   return specs;
 }
 
+/**
+ * Only a truly absent override falls back to the bundled specs. A dangling
+ * symlink or an unreadable parent is a broken override, and silently swapping
+ * in the bundled panel would put reviewers in the room the user did not choose.
+ */
 function specDir(kind: "reviewers" | "moderator"): { dir: string; source: SpecSource } {
   const user = path.join(getAgentDir(), "review-gate", kind);
-  if (fs.existsSync(user)) return { dir: user, source: "user" };
+  const broken = (error: unknown) => new Error(`Cannot read the ${kind} override at ${user}: ${describeError(error)}`);
+  try {
+    fs.statSync(user);
+    return { dir: user, source: "user" };
+  } catch (error) {
+    if (!isMissing(error)) throw broken(error);
+  }
+  // statSync follows symlinks, so ENOENT is also what a dangling one reports.
+  let link: fs.Stats | undefined;
+  try {
+    link = fs.lstatSync(user);
+  } catch (error) {
+    if (!isMissing(error)) throw broken(error);
+  }
+  if (link?.isSymbolicLink()) throw new Error(`The ${kind} override at ${user} is a symlink to something that does not exist.`);
   return { dir: path.join(PACKAGE_ROOT, kind), source: "bundled" };
+}
+
+function isMissing(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
 }
 
 export interface ReviewerDiscovery {
