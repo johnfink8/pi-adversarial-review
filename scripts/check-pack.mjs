@@ -12,7 +12,7 @@ const [pack] = JSON.parse(
 );
 const packed = new Set(pack.files.map((file) => file.path));
 
-const required = ["package.json", "README.md", "LICENSE", "CHANGELOG.md"];
+const required = ["package.json", "index.ts", "README.md", "LICENSE", "CHANGELOG.md"];
 for (const [dir, extension] of Object.entries(RUNTIME_DIRS)) {
   for (const entry of fs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith(extension)) {

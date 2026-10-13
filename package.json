@@ -31,6 +31,7 @@
     "node": ">=22.19.0"
   },
   "files": [
+    "index.ts",
     "src/*.ts",
     "prompts/*.md",
     "reviewers/*.md",
@@ -67,7 +68,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./index.ts"
     ]
   }
 }
