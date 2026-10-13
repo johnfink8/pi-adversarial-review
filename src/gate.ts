@@ -11,37 +11,44 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, type AgentDiscoveryResult, discoverModerator, discoverReviewers } from "./specs.ts";
-import { describeError, safeName } from "./util.ts";
-import type { Semaphore } from "./semaphore.ts";
-import {
-  buildDispatch,
-  type Dispatch,
-  type DispatchHost,
-  getFinalOutput,
-  isFailedResult,
-  type SingleResult,
-  runSingleAgent,
-  CHILD_ENV,
-  truncateOutput,
-} from "./runner.ts";
 import { type Changeset, captureChangeset, type Interdiff, type TreeSnapshot, writeInterdiff } from "./changeset.ts";
 import { loadPrompt } from "./prompts.ts";
-import { keepWarm, loadWarm, pruneWarm, type WarmStart } from "./warm.ts";
-import { approvalProtocol, isBlocking, moderationProtocol, parseRecord, parseRuling, RECORD_FENCE } from "./protocol.ts";
+import {
+  approvalProtocol,
+  isBlocking,
+  moderationProtocol,
+  parseRecord,
+  parseRuling,
+  RECORD_FENCE,
+} from "./protocol.ts";
 import {
   type AgentState,
   type ClearedItem,
   type Finding,
-  type Moderation,
-  type Severity,
-  type Verdict,
   loadRecord,
+  type Moderation,
   repoDir,
+  type Severity,
   saveRecord,
   specHash,
+  type Verdict,
   writeReport,
 } from "./record.ts";
+import {
+  buildDispatch,
+  CHILD_ENV,
+  type Dispatch,
+  type DispatchHost,
+  getFinalOutput,
+  isFailedResult,
+  runSingleAgent,
+  type SingleResult,
+  truncateOutput,
+} from "./runner.ts";
+import type { Semaphore } from "./semaphore.ts";
+import { type AgentConfig, type AgentDiscoveryResult, discoverModerator, discoverReviewers } from "./specs.ts";
+import { describeError, safeName } from "./util.ts";
+import { keepWarm, loadWarm, pruneWarm, type WarmStart } from "./warm.ts";
 
 export interface ReviewDeps {
   gate: Semaphore;
@@ -247,7 +254,12 @@ const rereviewPrompt = loadPrompt("rereview");
 const remoderatePrompt = loadPrompt("remoderate");
 
 /** Names what changed since the member's last usable pass, from the two trees the passes read. */
-function describeDelta(since: NonNullable<WarmStart["since"]>, changeset: Changeset, delta: Interdiff, verb: string): string {
+function describeDelta(
+  since: NonNullable<WarmStart["since"]>,
+  changeset: Changeset,
+  delta: Interdiff,
+  verb: string,
+): string {
   if (delta.files.length === 0) {
     return deltaNonePrompt({ verb, tree: changeset.tree, changeset: changeset.hash.slice(0, 16) });
   }
@@ -260,7 +272,8 @@ function describeDelta(since: NonNullable<WarmStart["since"]>, changeset: Change
     deltaPath: delta.path,
     deltaLines: String(delta.lines),
     deltaFileCount: String(delta.files.length),
-    deltaFiles: delta.files.slice(0, 40).join(", ") + (delta.files.length > 40 ? `, and ${delta.files.length - 40} more` : ""),
+    deltaFiles:
+      delta.files.slice(0, 40).join(", ") + (delta.files.length > 40 ? `, and ${delta.files.length - 40} more` : ""),
   });
 }
 
@@ -269,7 +282,12 @@ function describeDelta(since: NonNullable<WarmStart["since"]>, changeset: Change
  * not described by the author, and the verdict still has to cover the whole
  * changeset: a fix can break code the delta does not touch.
  */
-function warmReviewerTask(changeset: Changeset, intent: string, since: NonNullable<WarmStart["since"]>, delta: Interdiff): string {
+function warmReviewerTask(
+  changeset: Changeset,
+  intent: string,
+  since: NonNullable<WarmStart["since"]>,
+  delta: Interdiff,
+): string {
   return rereviewPrompt({
     delta: describeDelta(since, changeset, delta, "review"),
     patchPath: changeset.patchPath,
@@ -306,11 +324,19 @@ async function keepIfUsable(
     await keepWarm(
       changeset.repoRoot,
       changeset.head,
-      { agent: member.agent.name, specHash: member.hash, sessionId: kept.id, tree: changeset.tree, changesetHash: changeset.hash },
+      {
+        agent: member.agent.name,
+        specHash: member.hash,
+        sessionId: kept.id,
+        tree: changeset.tree,
+        changesetHash: changeset.hash,
+      },
       kept.dir,
     );
   } catch (error) {
-    warnings.push(`${member.agent.name}'s session could not be kept warm; its next pass starts cold (${describeError(error)})`);
+    warnings.push(
+      `${member.agent.name}'s session could not be kept warm; its next pass starts cold (${describeError(error)})`,
+    );
   } finally {
     await fs.promises.rm(kept.dir, { recursive: true, force: true });
   }
@@ -328,7 +354,7 @@ export async function runReview(deps: ReviewDeps, request: ReviewRequest): Promi
       `${CHILD_ENV} is set to 1 in this process, so the adversarial review panel refuses — reviewers are subagents, ` +
         "and a panel dispatched from inside one would spawn panels without end. If this is a subagent, return the work to " +
         "the session that owns the change. If this is the host session, unset " +
-        `${CHILD_ENV} before starting pi.`
+        `${CHILD_ENV} before starting pi.`,
     );
   }
 
@@ -340,19 +366,21 @@ export async function runReview(deps: ReviewDeps, request: ReviewRequest): Promi
   const recordPath = path.join(repoDir(changeset.repoRoot), `${changeset.hash}.json`);
 
   if (changeset.isEmpty) {
-    const reviewers: ReviewerSummary[] = panel.map((member): ReviewerSummary => ({
-      agent: member.agent.name,
-      verdict: "PROCEED",
-      ran: false,
-      warm: false,
-      model: "",
-      findings: [],
-      cleared: [],
-      note: "",
-      failure: "",
-      reportPath: "",
-      prose: "",
-    }));
+    const reviewers: ReviewerSummary[] = panel.map(
+      (member): ReviewerSummary => ({
+        agent: member.agent.name,
+        verdict: "PROCEED",
+        ran: false,
+        warm: false,
+        model: "",
+        findings: [],
+        cleared: [],
+        note: "",
+        failure: "",
+        reportPath: "",
+        prose: "",
+      }),
+    );
     return {
       verdict: "PROCEED",
       cleared: true,
@@ -426,9 +454,8 @@ async function runPanel(
   // record, settles them: re-running the blockers would only re-roll the dice
   // on a question the moderator has answered.
   const standing = standingOverturn(loaded.record?.moderation, moderator.hash, panel, states);
-  const owed = standing === undefined
-    ? panel.filter((member) => states.get(member.agent.name)?.verdict !== "PROCEED")
-    : [];
+  const owed =
+    standing === undefined ? panel.filter((member) => states.get(member.agent.name)?.verdict !== "PROCEED") : [];
 
   // A cached PROCEED was recorded against some intent. If the stated intent has
   // moved on, say so rather than quietly reusing verdicts that judged a
@@ -448,15 +475,22 @@ async function runPanel(
     const results = await Promise.all(
       members.map(async (member) => {
         const { warm, delta } = await startFor(changeset, member, warnings);
-        const task = warm.since === undefined || delta === undefined
-          ? reviewerTask(changeset, request.intent)
-          : warmReviewerTask(changeset, request.intent, warm.since, delta);
-        const result = await runSingleAgent(changeset.repoRoot, dispatch, discovery, (partial: SingleResult[]) => ({ results: partial }), {
-          agentName: member.agent.name,
-          task,
-          signal: request.signal,
-          session: { seedDir: warm.seedDir, id: warm.sessionId },
-        });
+        const task =
+          warm.since === undefined || delta === undefined
+            ? reviewerTask(changeset, request.intent)
+            : warmReviewerTask(changeset, request.intent, warm.since, delta);
+        const result = await runSingleAgent(
+          changeset.repoRoot,
+          dispatch,
+          discovery,
+          (partial: SingleResult[]) => ({ results: partial }),
+          {
+            agentName: member.agent.name,
+            task,
+            signal: request.signal,
+            session: { seedDir: warm.seedDir, id: warm.sessionId },
+          },
+        );
         return { member, result, delta };
       }),
     );
@@ -487,7 +521,10 @@ async function runPanel(
         });
 
         if (isFailedResult(result)) {
-          states.set(name, incomplete(result.errorMessage || result.stderr.trim() || `reviewer process exited ${result.exitCode}`));
+          states.set(
+            name,
+            incomplete(result.errorMessage || result.stderr.trim() || `reviewer process exited ${result.exitCode}`),
+          );
           continue;
         }
 
@@ -495,7 +532,9 @@ async function runPanel(
         // floor only: whether it opened the patch itself is reported, not
         // enforced, because a reviewer that inspected the changed files directly
         // did read the change and must not be failed for the way it read it.
-        const usedTools = result.messages.some((m) => m.role === "assistant" && m.content.some((p) => p.type === "toolCall"));
+        const usedTools = result.messages.some(
+          (m) => m.role === "assistant" && m.content.some((p) => p.type === "toolCall"),
+        );
         if (!usedTools) {
           states.set(
             name,
@@ -508,17 +547,25 @@ async function runPanel(
         // A warm reviewer is pointed at the delta first, and has read the
         // patch's earlier version in its own session; either read counts.
         const readable = delta === undefined ? [changeset.patchPath] : [changeset.patchPath, delta.path];
-        const openedPatch = result.messages.some((m) =>
-          m.role === "assistant" &&
-          m.content.some((p) => p.type === "toolCall" && readable.some((file) => JSON.stringify(p.arguments).includes(file)))
+        const openedPatch = result.messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.content.some(
+              (p) => p.type === "toolCall" && readable.some((file) => JSON.stringify(p.arguments).includes(file)),
+            ),
         );
         if (!openedPatch) {
-          warnings.push(`${name} recorded a verdict without opening ${readable.join(" or ")}; it may have judged the changed files rather than the patch`);
+          warnings.push(
+            `${name} recorded a verdict without opening ${readable.join(" or ")}; it may have judged the changed files rather than the patch`,
+          );
         }
 
         const parsed = parseRecord(output);
         usable = parsed.ok;
-        states.set(name, parsed.ok ? { ...base, ...parsed.record } : incomplete(`output was not a usable record: ${parsed.error}`));
+        states.set(
+          name,
+          parsed.ok ? { ...base, ...parsed.record } : incomplete(`output was not a usable record: ${parsed.error}`),
+        );
       } finally {
         await keepIfUsable(changeset, member, result, usable, warnings);
       }
@@ -555,22 +602,32 @@ async function runPanel(
   let moderation: ModerationSummary | undefined =
     standing === undefined
       ? undefined
-      : { overturn: true, ran: false, warm: false, model: standing.model, prose: "", failure: "", reportPath: standing.reportPath };
+      : {
+          overturn: true,
+          ran: false,
+          warm: false,
+          model: standing.model,
+          prose: "",
+          failure: "",
+          reportPath: standing.reportPath,
+        };
   if (panelVerdict === "BLOCK" && standing === undefined && request.signal?.aborted !== true) {
     const moderated = await moderate(changeset, request, dispatch, moderator, panel, states, warnings);
     ruling = moderated.ruling;
     moderation = moderated.summary;
   }
 
-  warnings.push(...await saveRecord({
-    version: 1,
-    repoRoot: changeset.repoRoot,
-    changesetHash: changeset.hash,
-    intent: request.intent,
-    updatedAt: new Date().toISOString(),
-    agents: Object.fromEntries(states),
-    moderation: ruling,
-  }));
+  warnings.push(
+    ...(await saveRecord({
+      version: 1,
+      repoRoot: changeset.repoRoot,
+      changesetHash: changeset.hash,
+      intent: request.intent,
+      updatedAt: new Date().toISOString(),
+      agents: Object.fromEntries(states),
+      moderation: ruling,
+    })),
+  );
 
   const reviewers: ReviewerSummary[] = panel.map((member) => {
     const name = member.agent.name;
@@ -647,7 +704,9 @@ async function moderate(
   const name = moderator.agent.name;
   const discovery: AgentDiscoveryResult = { agents: [moderator.agent], skipped: [] };
   const coldTask = moderatorTask(changeset, request, panel, states);
-  const judged = Object.fromEntries(panel.map((member) => [member.agent.name, states.get(member.agent.name)?.at ?? ""]));
+  const judged = Object.fromEntries(
+    panel.map((member) => [member.agent.name, states.get(member.agent.name)?.at ?? ""]),
+  );
 
   // Same contract as a reviewer: one re-run after an unusable result, and a
   // failure after that leaves the BLOCK standing rather than reading as a ruling.
@@ -657,15 +716,22 @@ async function moderate(
   for (let attempt = 0; attempt < 2 && request.signal?.aborted !== true; attempt += 1) {
     if (attempt > 0) warnings.push(`re-ran the moderator once after an unusable ruling: ${failure}`);
     const { warm, delta } = await startFor(changeset, moderator, warnings);
-    const task = warm.since === undefined || delta === undefined
-      ? coldTask
-      : remoderatePrompt({ delta: describeDelta(warm.since, changeset, delta, "ruling"), task: coldTask });
-    const result = await runSingleAgent(changeset.repoRoot, dispatch, discovery, (partial: SingleResult[]) => ({ results: partial }), {
-      agentName: name,
-      task,
-      signal: request.signal,
-      session: { seedDir: warm.seedDir, id: warm.sessionId },
-    });
+    const task =
+      warm.since === undefined || delta === undefined
+        ? coldTask
+        : remoderatePrompt({ delta: describeDelta(warm.since, changeset, delta, "ruling"), task: coldTask });
+    const result = await runSingleAgent(
+      changeset.repoRoot,
+      dispatch,
+      discovery,
+      (partial: SingleResult[]) => ({ results: partial }),
+      {
+        agentName: name,
+        task,
+        signal: request.signal,
+        session: { seedDir: warm.seedDir, id: warm.sessionId },
+      },
+    );
     let usable = false;
     try {
       const output = getFinalOutput(result.messages);
@@ -677,7 +743,9 @@ async function moderate(
         continue;
       }
       // A ruling that opened nothing judged the summaries, not the code.
-      const usedTools = result.messages.some((m) => m.role === "assistant" && m.content.some((p) => p.type === "toolCall"));
+      const usedTools = result.messages.some(
+        (m) => m.role === "assistant" && m.content.some((p) => p.type === "toolCall"),
+      );
       if (!usedTools) {
         failure = `ruled after ${result.usage.turns} assistant turn(s) without reading any report or source`;
         continue;
@@ -698,7 +766,15 @@ async function moderate(
       };
       return {
         ruling,
-        summary: { overturn: parsed.overturn, ran: true, warm: delta !== undefined, model, prose: output, failure: "", reportPath },
+        summary: {
+          overturn: parsed.overturn,
+          ran: true,
+          warm: delta !== undefined,
+          model,
+          prose: output,
+          failure: "",
+          reportPath,
+        },
       };
     } finally {
       await keepIfUsable(changeset, moderator, result, usable, warnings);
@@ -706,7 +782,15 @@ async function moderate(
   }
   return {
     ruling: undefined,
-    summary: { overturn: undefined, ran: true, warm: false, model, prose: "", failure: failure || "aborted before ruling", reportPath },
+    summary: {
+      overturn: undefined,
+      ran: true,
+      warm: false,
+      model,
+      prose: "",
+      failure: failure || "aborted before ruling",
+      reportPath,
+    },
   };
 }
 
@@ -721,7 +805,10 @@ function moderatorTask(
     const findings = (state?.findings ?? []).map(
       (f) => `    - [${f.severity}] ${f.file}:${f.line} — ${f.problem}\n      Fix asked: ${f.fix}`,
     );
-    return [`- ${member.agent.name}: ${state?.verdict ?? "INCOMPLETE"} — full report: ${state?.reportPath ?? "(none)"}`, ...findings].join("\n");
+    return [
+      `- ${member.agent.name}: ${state?.verdict ?? "INCOMPLETE"} — full report: ${state?.reportPath ?? "(none)"}`,
+      ...findings,
+    ].join("\n");
   });
   return [
     `The review panel BLOCKED the changeset at ${changeset.patchPath} (${changeset.patchLines} line(s), ` +
@@ -811,10 +898,14 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
   ];
 
   const listFindings = (list: AggregatedFinding[]) =>
-    list.map((f, i) => `${i + 1}. [${f.severity}] ${f.agent} — ${f.file}:${f.line}\n   ${f.problem}\n   Fix: ${f.fix}`).join("\n");
+    list
+      .map((f, i) => `${i + 1}. [${f.severity}] ${f.agent} — ${f.file}:${f.line}\n   ${f.problem}\n   Fix: ${f.fix}`)
+      .join("\n");
   const blocking = outcome.findings.filter(isBlocking);
   const advisory = outcome.findings.filter((f) => !isBlocking(f));
-  sections.push(blocking.length > 0 ? `## Findings (${blocking.length})\n${listFindings(blocking)}` : "## Findings\nNone blocking.");
+  sections.push(
+    blocking.length > 0 ? `## Findings (${blocking.length})\n${listFindings(blocking)}` : "## Findings\nNone blocking.",
+  );
   if (advisory.length > 0) {
     sections.push(`## Advisory (${advisory.length}, LOW — do not block)\n${listFindings(advisory)}`);
   }
@@ -834,10 +925,14 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
 
   const incomplete = outcome.reviewers.filter((r) => r.verdict === "INCOMPLETE");
   if (incomplete.length > 0) {
-    sections.push(`## Incomplete — the gate could not be evaluated for\n${incomplete.map((r) => `- ${r.agent}: ${r.failure}`).join("\n")}`);
+    sections.push(
+      `## Incomplete — the gate could not be evaluated for\n${incomplete.map((r) => `- ${r.agent}: ${r.failure}`).join("\n")}`,
+    );
   }
   if (outcome.disagreements.length > 0) {
-    sections.push(`## Reviewer disagreements (unresolved, caller decides)\n${outcome.disagreements.map((d) => `- ${d}`).join("\n")}`);
+    sections.push(
+      `## Reviewer disagreements (unresolved, caller decides)\n${outcome.disagreements.map((d) => `- ${d}`).join("\n")}`,
+    );
   }
   if (outcome.warnings.length > 0) {
     sections.push(`## Warnings\n${outcome.warnings.map((w) => `- ${w}`).join("\n")}`);
@@ -848,8 +943,8 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
   const index = [
     ...outcome.reviewers.map(
       (r) =>
-        `- ${r.agent}: ${r.verdict}${r.ran ? (r.warm ? " (warm)" : " (cold)") : " (cached, not re-run)"}, ${r.findings.length} finding(s), ${r.cleared.length} cleared`
-        + `${r.note ? ` — note: ${r.note}` : ""}\n  Report: ${r.reportPath}`,
+        `- ${r.agent}: ${r.verdict}${r.ran ? (r.warm ? " (warm)" : " (cold)") : " (cached, not re-run)"}, ${r.findings.length} finding(s), ${r.cleared.length} cleared` +
+        `${r.note ? ` — note: ${r.note}` : ""}\n  Report: ${r.reportPath}`,
     ),
   ];
   sections.push(`## Reviewer index (${outcome.reviewers.length})\n${index.join("\n")}`);

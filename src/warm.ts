@@ -18,9 +18,9 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describeError, isRecord, safeName } from "./util.ts";
 import { isAncestor, treeExists } from "./changeset.ts";
 import { repoDir } from "./record.ts";
+import { describeError, isRecord, safeName } from "./util.ts";
 
 /** Warm sessions for a HEAD nothing has reviewed against in this long are dropped. */
 const STALE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -114,7 +114,11 @@ export async function loadWarm(
   if (sessionFiles.length !== 1) {
     return discard(`its kept session at ${sessionDir} holds ${sessionFiles.length} session files, not 1`);
   }
-  return { seedDir: sessionDir, sessionId: state.sessionId, since: { tree: state.tree, changesetHash: state.changesetHash } };
+  return {
+    seedDir: sessionDir,
+    sessionId: state.sessionId,
+    since: { tree: state.tree, changesetHash: state.changesetHash },
+  };
 }
 
 /**
@@ -166,7 +170,8 @@ export async function pruneWarm(repoRoot: string, head: string, warnings: string
     try {
       // A name git cannot resolve (a commit since gc'd, or rewritten away) is not
       // known to be behind, so only the idle rule can reclaim it.
-      const behind = entry.name === "unborn" || (head !== "" && (await isAncestor(repoRoot, entry.name, head).catch(() => false)));
+      const behind =
+        entry.name === "unborn" || (head !== "" && (await isAncestor(repoRoot, entry.name, head).catch(() => false)));
       const stale = Date.now() - (await fs.promises.stat(full)).mtimeMs > STALE_MS;
       if (behind || stale) await fs.promises.rm(full, { recursive: true, force: true });
     } catch (error) {

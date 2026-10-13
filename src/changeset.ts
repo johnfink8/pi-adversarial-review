@@ -13,8 +13,8 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describeError, isRecord } from "./util.ts";
 import { repoDir, reviewsRoot } from "./record.ts";
+import { describeError, isRecord } from "./util.ts";
 
 /** Above this the patch is not reviewable in one pass; splitting the change is the fix. */
 export const MAX_PATCH_BYTES = 512 * 1024;
@@ -128,7 +128,9 @@ function readUntracked(repoRoot: string, file: string, budgetLeft: number): Untr
       throw new ChangesetError(`Cannot read untracked symlink ${file}: ${String(error)}`);
     }
     if (Buffer.byteLength(target, "utf-8") > budgetLeft) {
-      throw new ChangesetTooLargeError(`Untracked symlink ${file} is over the ${MAX_PATCH_BYTES / 1024} KiB review budget.`);
+      throw new ChangesetTooLargeError(
+        `Untracked symlink ${file} is over the ${MAX_PATCH_BYTES / 1024} KiB review budget.`,
+      );
     }
     return {
       file,
@@ -141,8 +143,8 @@ function readUntracked(repoRoot: string, file: string, budgetLeft: number): Untr
 
   if (stat.size > budgetLeft) {
     throw new ChangesetTooLargeError(
-      `Untracked file ${file} is ${Math.round(stat.size / 1024)} KiB, over the ${MAX_PATCH_BYTES / 1024} KiB review budget. `
-        + `Ignore it (.gitignore) or commit it separately — the panel cannot read a file that large.`,
+      `Untracked file ${file} is ${Math.round(stat.size / 1024)} KiB, over the ${MAX_PATCH_BYTES / 1024} KiB review budget. ` +
+        `Ignore it (.gitignore) or commit it separately — the panel cannot read a file that large.`,
     );
   }
 
@@ -175,7 +177,12 @@ function isUnder(candidate: string, root: string): boolean {
  * absent. `-z` is the only output form that never quotes.
  */
 async function diffPaths(repoRoot: string, args: string[], env: GitEnv): Promise<string[]> {
-  const out = await gitOrThrow(repoRoot, [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...args], "the changed paths", env);
+  const out = await gitOrThrow(
+    repoRoot,
+    [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...args],
+    "the changed paths",
+    env,
+  );
   return out.split("\0").filter(Boolean);
 }
 
@@ -189,7 +196,11 @@ async function diffPaths(repoRoot: string, args: string[], env: GitEnv): Promise
  * mean "in HEAD", so the changeset is the working tree against HEAD and nothing
  * the user stages can change it.
  */
-async function withHeadIndex<T>(repoRoot: string, base: string, fn: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+async function withHeadIndex<T>(
+  repoRoot: string,
+  base: string,
+  fn: (env: NodeJS.ProcessEnv) => Promise<T>,
+): Promise<T> {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "review-index-"));
   try {
     const env = { ...process.env, GIT_INDEX_FILE: path.join(dir, "index") };
@@ -232,7 +243,9 @@ export async function isAncestor(repoRoot: string, ancestor: string, commit: str
   const result = await git(repoRoot, ["merge-base", "--is-ancestor", ancestor, commit]);
   if (result.code === 0) return true;
   if (result.code === 1) return false;
-  throw new ChangesetError(`git merge-base --is-ancestor ${ancestor} ${commit} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+  throw new ChangesetError(
+    `git merge-base --is-ancestor ${ancestor} ${commit} failed: ${result.stderr.trim() || `exit ${result.code}`}`,
+  );
 }
 
 export interface Interdiff {
@@ -248,11 +261,19 @@ export interface Interdiff {
 export async function writeInterdiff(changeset: Changeset, fromTree: string): Promise<Interdiff> {
   const { repoRoot, tree } = changeset;
   const files = (
-    await gitOrThrow(repoRoot, [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...DIFF_FLAGS, fromTree, tree], "the changed paths since the last review")
+    await gitOrThrow(
+      repoRoot,
+      [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...DIFF_FLAGS, fromTree, tree],
+      "the changed paths since the last review",
+    )
   )
     .split("\0")
     .filter(Boolean);
-  const diff = await gitOrThrow(repoRoot, [...QUOTE_PREFIX, "diff", ...DIFF_FLAGS, fromTree, tree], "the changes since the last review");
+  const diff = await gitOrThrow(
+    repoRoot,
+    [...QUOTE_PREFIX, "diff", ...DIFF_FLAGS, fromTree, tree],
+    "the changes since the last review",
+  );
   const body = [
     `Changes since the last review: tree ${fromTree} -> tree ${tree}`,
     `Changeset ${changeset.hash}`,
@@ -310,7 +331,8 @@ async function isUnbornBranch(repoRoot: string): Promise<{ ok: true } | { ok: fa
   }
   const exists = await git(repoRoot, ["show-ref", "--verify", "--quiet", ref]);
   if (exists.code === 0) return { ok: false, why: `branch ${ref} exists but HEAD would not resolve it` };
-  if (exists.code !== 1) return { ok: false, why: `git show-ref ${ref} failed: ${exists.stderr.trim() || `exit ${exists.code}`}` };
+  if (exists.code !== 1)
+    return { ok: false, why: `git show-ref ${ref} failed: ${exists.stderr.trim() || `exit ${exists.code}`}` };
   return { ok: true };
 }
 
@@ -349,8 +371,7 @@ export interface TreeSnapshot {
  * makes an OS error read as a content edit — the drift report then blames the
  * wrong thing, and a re-run cannot clear it.
  */
-export type Digest =
-  { kind: "hash"; hash: string } | { kind: "absent" } | { kind: "unreadable"; reason: string };
+export type Digest = { kind: "hash"; hash: string } | { kind: "absent" } | { kind: "unreadable"; reason: string };
 
 /** The digest's hash, when it has one. */
 function digestHash(digest: Digest | undefined): string | undefined {
@@ -430,7 +451,11 @@ export function snapshotDrift(reviewed: TreeSnapshot, now: TreeSnapshot): string
       continue;
     }
     if (digestHash(reviewedDigest) !== digestHash(current)) {
-      drift.push(current.kind === "absent" ? `${file} was removed after the panel read it` : `${file} changed after the panel read it`);
+      drift.push(
+        current.kind === "absent"
+          ? `${file} was removed after the panel read it`
+          : `${file} changed after the panel read it`,
+      );
     }
   }
   for (const file of now.untracked) {
@@ -458,7 +483,11 @@ export async function committedDrift(repoRoot: string, headBefore: string, revie
       ? (await gitOrThrow(repoRoot, ["hash-object", "-t", "tree", "/dev/null"], "the empty tree")).trim()
       : headBefore;
   const changed = (
-    await gitOrThrow(repoRoot, [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...DIFF_FLAGS, parent, headAfter], "the committed paths")
+    await gitOrThrow(
+      repoRoot,
+      [...QUOTE_PREFIX, "diff", "--name-only", "-z", ...DIFF_FLAGS, parent, headAfter],
+      "the committed paths",
+    )
   )
     .split("\0")
     .filter(Boolean);
@@ -476,14 +505,18 @@ export async function committedDrift(repoRoot: string, headBefore: string, revie
     }
     const seen = reviewed.contents[file];
     if (seen !== undefined && seen.kind === "unreadable") {
-      drift.push(`${file} could not be hashed when the panel read it (${seen.reason}) — the committed bytes were never compared`);
+      drift.push(
+        `${file} could not be hashed when the panel read it (${seen.reason}) — the committed bytes were never compared`,
+      );
       continue;
     }
     const reviewedHash = digestHash(seen);
     if (reviewedHash === undefined) {
       drift.push(`${file} was committed but the panel never read it`);
     } else if (reviewedHash !== committed) {
-      drift.push(`${file} was committed with content other than the worktree bytes the panel read (a stale or partial stage? \`git add -A\` before committing)`);
+      drift.push(
+        `${file} was committed with content other than the worktree bytes the panel read (a stale or partial stage? \`git add -A\` before committing)`,
+      );
     }
   }
   return drift;
@@ -497,7 +530,13 @@ export async function committedDrift(repoRoot: string, headBefore: string, revie
  * wrong blob — and this decides whether a commit counts as reviewed.
  */
 async function committedBlob(repoRoot: string, commit: string, file: string): Promise<string | undefined> {
-  const out = (await gitOrThrow(repoRoot, [...QUOTE_PREFIX, "ls-tree", "-z", commit, "--", file], `the committed content of ${file}`)).trim();
+  const out = (
+    await gitOrThrow(
+      repoRoot,
+      [...QUOTE_PREFIX, "ls-tree", "-z", commit, "--", file],
+      `the committed content of ${file}`,
+    )
+  ).trim();
   if (out === "") return undefined;
   const sha = out.split("	")[0]?.split(" ")?.[2];
   return sha;
@@ -571,7 +610,12 @@ export async function captureChangeset(cwd: string): Promise<Changeset> {
   return withHeadIndex(repoRoot, base, (env) => captureAgainst(repoRoot, head, base, env));
 }
 
-async function captureAgainst(repoRoot: string, head: string, base: string, env: NodeJS.ProcessEnv): Promise<Changeset> {
+async function captureAgainst(
+  repoRoot: string,
+  head: string,
+  base: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Changeset> {
   // The full diffs are buffered several times over (raw, hash material, the
   // assembled patch), so a huge tracked diff would reach memory before the
   // budget check and OOM the session instead of naming the fix. Line counts

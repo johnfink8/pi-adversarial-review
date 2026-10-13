@@ -35,7 +35,15 @@ const WRAPPERS = new Set(["env", "sudo", "command", "time", "nice", "nohup", "st
  * what follows them. Without this, `git --work-tree /other commit` reads `/other`
  * as the subcommand and the commit goes ungated.
  */
-const GIT_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"]);
+const GIT_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--super-prefix",
+]);
 
 export function looksLikeGitCommit(command: string): boolean {
   return expandSegments(command, 1).some((segment) => findCommit(segment.tokens) !== undefined);
@@ -102,14 +110,14 @@ export function commitEscapes(command: string): CommitEscape[] {
     // Every earlier segment runs before this commit, so a `cd` in any of them
     // moves the directory this commit operates on.
     for (const earlier of segments.slice(0, index)) {
-      for (const escape of segmentEscapes(earlier.raw)) {
+      for (const move of segmentEscapes(earlier.raw)) {
         // Several commits in one command each see the same earlier move; the
         // refusal reports it once.
-        if (!escapes.some((seen) => seen.how === escape.how)) escapes.push(escape);
+        if (!escapes.some((seen) => seen.how === move.how)) escapes.push(move);
       }
     }
-    for (const escape of repositoryOptions(segment.tokens.slice(commit.gitIndex + 1, commit.subcommandIndex))) {
-      escapes.push(escape);
+    for (const option of repositoryOptions(segment.tokens.slice(commit.gitIndex + 1, commit.subcommandIndex))) {
+      escapes.push(option);
     }
     for (const token of segment.raw.slice(0, commit.gitIndex)) {
       const match = RAW_ASSIGNMENT.exec(token);

@@ -15,9 +15,9 @@ import { StringDecoder } from "node:string_decoder";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message, StopReason, Usage } from "@earendil-works/pi-ai";
 import { type ExtensionContext, getPackageDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { Semaphore } from "./semaphore.ts";
 import type { AgentConfig, AgentDiscoveryResult } from "./specs.ts";
 import { describeError, isRecord, safeName } from "./util.ts";
-import type { Semaphore } from "./semaphore.ts";
 
 export const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
@@ -112,7 +112,8 @@ export function truncateOutput(output: string, cap: number = PER_TASK_OUTPUT_CAP
 
 function isUsageShape(value: unknown): value is Usage {
   if (!isRecord(value)) return false;
-  if (!["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every((key) => Number.isFinite(value[key]))) return false;
+  if (!["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every((key) => Number.isFinite(value[key])))
+    return false;
   // cost.total is the one nested dereference the accumulator makes, so the
   // predicate has to establish it. Asserting the whole Usage type off four flat
   // numbers leaves the checker silent exactly where the code reaches deeper.
@@ -137,7 +138,10 @@ function isMessageShape(value: unknown): value is Message {
   // An assistant message's model is reported as the run's model and its
   // errorMessage verbatim, so both are established here rather than trusted
   // from the wire where they are next read.
-  if (role === "assistant" && (typeof value.model !== "string" || (value.errorMessage !== undefined && typeof value.errorMessage !== "string"))) {
+  if (
+    role === "assistant" &&
+    (typeof value.model !== "string" || (value.errorMessage !== undefined && typeof value.errorMessage !== "string"))
+  ) {
     return false;
   }
   return true;
@@ -324,7 +328,15 @@ export async function runSingleAgent<T>(
     emitUpdate();
 
     let wasAborted = false;
-    const args = [...baseArgs, "--session-dir", sessionDir, "--session-id", sessionId, ...(model ? ["--model", model] : []), `Task: ${task}`];
+    const args = [
+      ...baseArgs,
+      "--session-dir",
+      sessionDir,
+      "--session-id",
+      sessionId,
+      ...(model ? ["--model", model] : []),
+      `Task: ${task}`,
+    ];
     const outcome = await runProcess(args, cwd ?? defaultCwd, signal, currentResult, emitUpdate, () => {
       wasAborted = true;
     });

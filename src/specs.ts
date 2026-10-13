@@ -67,7 +67,10 @@ function parseToolList(value: unknown): { tools?: string[]; error?: string } {
   const bad = raw.filter((t) => typeof t !== "string");
   if (bad.length > 0) return { error: `tools entries must be strings, got ${JSON.stringify(bad)}` };
 
-  const tools = raw.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean);
+  const tools = raw
+    .filter((t): t is string => typeof t === "string")
+    .map((t) => t.trim())
+    .filter(Boolean);
   return tools.length > 0 ? { tools } : {};
 }
 
@@ -83,7 +86,10 @@ function loadSpecsFromDir(dir: string, source: SpecSource, skipped: SkippedAgent
   // `reviewers/foo.json` or a subdirectory would thin the panel with nothing
   // printed and the verdict still reading as unanimous.
   const strays = entries
-    .filter((entry) => !entry.name.startsWith(".") && !(entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink())))
+    .filter(
+      (entry) =>
+        !entry.name.startsWith(".") && !(entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink())),
+    )
     .map((entry) => entry.name);
   if (strays.length > 0) {
     throw new Error(
@@ -148,7 +154,8 @@ function specDir(kind: "reviewers" | "moderator"): { dir: string; source: SpecSo
   } catch (error) {
     if (!isMissing(error)) throw broken(error);
   }
-  if (link?.isSymbolicLink()) throw new Error(`The ${kind} override at ${user} is a symlink to something that does not exist.`);
+  if (link?.isSymbolicLink())
+    throw new Error(`The ${kind} override at ${user} is a symlink to something that does not exist.`);
   return { dir: path.join(PACKAGE_ROOT, kind), source: "bundled" };
 }
 
@@ -186,7 +193,9 @@ export function discoverModerator(): AgentConfig {
   const skipped: SkippedAgentFile[] = [];
   const found = loadSpecsFromDir(dir, source, skipped);
   if (skipped.length > 0) {
-    throw new Error(`Moderator directory ${dir} has unreadable spec(s): ${skipped.map((s) => `${s.filePath} — ${s.reason}`).join("; ")}.`);
+    throw new Error(
+      `Moderator directory ${dir} has unreadable spec(s): ${skipped.map((s) => `${s.filePath} — ${s.reason}`).join("; ")}.`,
+    );
   }
   const [moderator, ...extra] = found;
   if (moderator === undefined || extra.length > 0) {

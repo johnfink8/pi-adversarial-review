@@ -47,7 +47,9 @@ export function loadConfig(): GateConfig {
 
   const value = raw.maxConcurrency;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_CONCURRENCY_LIMIT) {
-    throw new Error(`${configPath} maxConcurrency must be an integer from 1 to ${MAX_CONCURRENCY_LIMIT}, got ${JSON.stringify(value)}`);
+    throw new Error(
+      `${configPath} maxConcurrency must be an integer from 1 to ${MAX_CONCURRENCY_LIMIT}, got ${JSON.stringify(value)}`,
+    );
   }
   return { maxConcurrency: value };
 }

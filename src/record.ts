@@ -10,9 +10,9 @@
  * dirty the tree the review just cleared and change the hash underneath it.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { describeError, isRecord, safeName } from "./util.ts";
 
@@ -212,7 +212,10 @@ function validateModeration(value: unknown): { ok: true; moderation: Moderation 
   return { ok: true, moderation: { specHash: specHashValue, model, at, reportPath, overturn: value.overturn, judged } };
 }
 
-function validateAgentState(name: string, value: unknown): { ok: true; state: AgentState } | { ok: false; error: string } {
+function validateAgentState(
+  name: string,
+  value: unknown,
+): { ok: true; state: AgentState } | { ok: false; error: string } {
   const bad = (why: string): { ok: false; error: string } => ({ ok: false, error: `agent "${name}": ${why}` });
   if (!isRecord(value)) return bad("must be an object");
 
@@ -270,7 +273,10 @@ export function validateFinding(value: unknown): { ok: true; value: Finding } | 
   if (!isRecord(value)) return { ok: false, error: "a finding is not an object" };
   const severity = asSeverity(value.severity);
   if (severity === undefined) {
-    return { ok: false, error: `a finding severity must be HIGH, MEDIUM or LOW, got ${JSON.stringify(value.severity)}` };
+    return {
+      ok: false,
+      error: `a finding severity must be HIGH, MEDIUM or LOW, got ${JSON.stringify(value.severity)}`,
+    };
   }
   const file = asString(value.file);
   const line = asString(value.line);

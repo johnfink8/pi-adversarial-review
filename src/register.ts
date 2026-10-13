@@ -10,11 +10,18 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  committedDrift,
+  NotARepositoryError,
+  resolveRepoRoot,
+  snapshotDrift,
+  snapshotTree,
+  type TreeSnapshot,
+} from "./changeset.ts";
+import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.ts";
+import { type ReviewDeps, type ReviewOutcome, runReview } from "./gate.ts";
 import { CHILD_ENV } from "./runner.ts";
 import { describeError } from "./util.ts";
-import { commitEscapes, looksLikeGitCommit, type CommitEscape } from "./commit.ts";
-import { NotARepositoryError, type TreeSnapshot, committedDrift, resolveRepoRoot, snapshotDrift, snapshotTree } from "./changeset.ts";
-import { type ReviewDeps, type ReviewOutcome, runReview } from "./gate.ts";
 
 const STATUS_KEY = "adversarial-review";
 const MAX_INTENT_CHARS = 1200;
@@ -95,7 +102,6 @@ const ReviewParams = Type.Object({
 });
 
 export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
-
   pi.on("before_agent_start", (event, ctx) => {
     if (process.env[CHILD_ENV] !== "1") {
       event.systemPromptOptions.sections.adversarial_review = SYSTEM_SECTION;
@@ -176,7 +182,10 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
         const color = r.verdict === "PROCEED" ? "success" : r.verdict === "BLOCK" ? "warning" : "error";
         return (
           `  ${theme.fg(color, r.verdict.padEnd(10))}${theme.fg("accent", r.agent)}` +
-          theme.fg("dim", ` ${r.ran ? "ran" : "cached"} · ${r.findings.length} finding(s) · ${r.cleared.length} cleared`)
+          theme.fg(
+            "dim",
+            ` ${r.ran ? "ran" : "cached"} · ${r.findings.length} finding(s) · ${r.cleared.length} cleared`,
+          )
         );
       });
       return new Text(`${header}\n${lines.join("\n")}`, 0, 0);
@@ -229,7 +238,12 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     const skip = skips.get(session);
     if (skip !== undefined) {
       skips.delete(session);
-      rememberReport(ctx, event.toolCallId, { report: skipReport(skip), reviewed: undefined, repoRoot: ctx.cwd, headBefore: "" });
+      rememberReport(ctx, event.toolCallId, {
+        report: skipReport(skip),
+        reviewed: undefined,
+        repoRoot: ctx.cwd,
+        headBefore: "",
+      });
       ctx.ui.notify(`Commit allowed without review by user authorization: ${skip}`, "warning");
       return;
     }
@@ -254,7 +268,14 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     let outcome: ReviewOutcome;
     try {
       outcome = await withStatus(ctx, () =>
-        runReview(deps, { cwd: ctx.cwd, host: ctx, intent: intentFor(session), context: "", trigger: "commit", signal: ctx.signal }),
+        runReview(deps, {
+          cwd: ctx.cwd,
+          host: ctx,
+          intent: intentFor(session),
+          context: "",
+          trigger: "commit",
+          signal: ctx.signal,
+        }),
       );
     } catch (error) {
       if (error instanceof NotARepositoryError) {
@@ -329,7 +350,10 @@ async function verifyCleared(pending: PendingReport): Promise<string> {
     // asked to review)? And did the tree move under the
     // verdict at all, commit or no commit?
     shipped = await committedDrift(pending.repoRoot, pending.headBefore, pending.reviewed);
-    moved = snapshotDrift(pending.reviewed, await snapshotTree(pending.repoRoot, Object.keys(pending.reviewed.contents)));
+    moved = snapshotDrift(
+      pending.reviewed,
+      await snapshotTree(pending.repoRoot, Object.keys(pending.reviewed.contents)),
+    );
   } catch (error) {
     return (
       `${pending.report}\n\n` +
@@ -370,13 +394,13 @@ async function foreignRepositoryReason(escapes: CommitEscape[], cwd: string): Pr
   } catch (error) {
     return `this session's directory is not a repository: ${describeError(error)}`;
   }
-  for (const escape of escapes) {
-    const resolved = path.resolve(cwd, escape.path);
+  for (const found of escapes) {
+    const resolved = path.resolve(cwd, found.path);
     try {
       const root = await resolveRepoRoot(resolved);
-      if (root !== sessionRoot) return `${escape.how} resolves to ${root}, and this session reviews ${sessionRoot}`;
+      if (root !== sessionRoot) return `${found.how} resolves to ${root}, and this session reviews ${sessionRoot}`;
     } catch (error) {
-      return `${escape.how} resolves to ${resolved}, whose repository the gate cannot read: ${describeError(error)}`;
+      return `${found.how} resolves to ${resolved}, whose repository the gate cannot read: ${describeError(error)}`;
     }
   }
   return undefined;
@@ -413,5 +437,3 @@ function intentFor(session: string): string {
   if (intent === undefined || intent === "") return UNKNOWN_INTENT;
   return intent.length > MAX_INTENT_CHARS ? `${intent.slice(0, MAX_INTENT_CHARS)}…` : intent;
 }
-
-

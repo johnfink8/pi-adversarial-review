@@ -8,17 +8,17 @@
  * mean pattern-matching English to decide whether code ships.
  */
 
-import { isRecord } from "./util.ts";
 import {
   asString,
   asVerdict,
-  validateCleared,
-  validateFinding,
   type ClearedItem,
   type Finding,
   type ReviewerRecord,
   type Verdict,
+  validateCleared,
+  validateFinding,
 } from "./record.ts";
+import { isRecord } from "./util.ts";
 
 export const RECORD_FENCE = "adversarial-review-record";
 
@@ -119,7 +119,8 @@ export function parseRecord(output: string): ParseResult {
 
   let parsed: unknown;
   const block = blocks[0];
-  if (block === undefined) return { ok: false, error: `no \`\`\`${RECORD_FENCE}\`\`\` block in the reviewer's final message` };
+  if (block === undefined)
+    return { ok: false, error: `no \`\`\`${RECORD_FENCE}\`\`\` block in the reviewer's final message` };
   try {
     parsed = JSON.parse(block);
   } catch (error) {
@@ -138,7 +139,7 @@ function validateReviewerRecord(value: unknown): ParseResult {
   if (!Array.isArray(value.findings)) return { ok: false, error: "findings must be an array" };
   if (!Array.isArray(value.cleared)) return { ok: false, error: "cleared must be an array" };
   const note = asString(value.note);
-  if (note === undefined) return { ok: false, error: "note must be a string (use \"\" when there is nothing to add)" };
+  if (note === undefined) return { ok: false, error: 'note must be a string (use "" when there is nothing to add)' };
 
   const findings: Finding[] = [];
   for (const entry of value.findings) {
@@ -227,7 +228,7 @@ export function parseRuling(output: string): RulingResult {
 }
 
 function fencedBlocks(output: string, fenceName: string): string[] {
-  const fence = new RegExp("```\\s*" + fenceName + "[^\\n]*\\n([\\s\\S]*?)```", "g");
+  const fence = new RegExp(`\`\`\`\\s*${fenceName}[^\\n]*\\n([\\s\\S]*?)\`\`\``, "g");
   const blocks: string[] = [];
   for (let match = fence.exec(output); match !== null; match = fence.exec(output)) {
     if (match[1] !== undefined) blocks.push(match[1]);
