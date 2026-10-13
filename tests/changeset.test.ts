@@ -68,6 +68,29 @@ describe("committedDrift", () => {
     expect(drift).toHaveLength(1);
     expect(drift[0]).toContain("a.txt");
   });
+
+  it("allows committing part of the reviewed tree", async () => {
+    const repo = tempRepo();
+    repo.write("a.txt", "two\n");
+    repo.write("b.txt", "new\n");
+    const reviewed = await captureChangeset(repo.root);
+    repo.git("add", "a.txt");
+    repo.git("commit", "-qm", "part");
+    expect(await committedDrift(repo.root, reviewed.head, reviewed.snapshot)).toEqual([]);
+  });
+
+  it("catches a staged change the worktree no longer has", async () => {
+    const repo = tempRepo();
+    repo.write("a.txt", "two\n");
+    repo.git("add", "a.txt");
+    repo.write("a.txt", "one\n");
+    const reviewed = await captureChangeset(repo.root);
+    expect(reviewed.files).toEqual([]);
+    repo.git("commit", "-qm", "unreviewed");
+    const drift = await committedDrift(repo.root, reviewed.head, reviewed.snapshot);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toContain("a.txt");
+  });
 });
 
 describe("writeInterdiff", () => {

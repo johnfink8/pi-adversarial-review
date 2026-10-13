@@ -1,7 +1,7 @@
 {
   "name": "pi-adversarial-review",
   "version": "0.1.0",
-  "description": "An adversarial review gate for the pi coding agent: a panel of reviewer agents must clear the exact bits of a changeset before `git commit` runs.",
+  "description": "An adversarial review gate for the pi coding agent: a panel of reviewer agents must clear the working tree before `git commit` runs.",
   "type": "module",
   "license": "MIT",
   "author": "John Fink <johnfink8@gmail.com>",
@@ -45,7 +45,7 @@
     "format": "biome format --write",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm test"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && node scripts/check-pack.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

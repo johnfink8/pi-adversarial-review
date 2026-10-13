@@ -1,13 +1,13 @@
 # pi-adversarial-review
 
-An adversarial review gate for the [pi coding agent](https://github.com/earendil-works/pi). Before `git commit` runs, a panel of reviewer agents reads the exact bits being committed, and any HIGH or MEDIUM finding blocks the commit. A blocked panel goes to a moderator, who either upholds the block or overturns it.
+An adversarial review gate for the [pi coding agent](https://github.com/earendil-works/pi). Before `git commit` runs, a panel of reviewer agents reads every change in the working tree against HEAD, and any HIGH or MEDIUM finding blocks the commit. A blocked panel goes to a moderator, who either upholds the block or overturns it.
 
 It exists for long autonomous runs: a model working toward a goal for hours commits often, and nothing else reads those commits until a human does.
 
 ## What you get
 
 - **`adversarial_review`**, a tool the model calls before committing. It returns the panel's verdict, every finding, and the path of each full report.
-- **A `git commit` gate.** A commit run through bash is blocked unless the panel cleared exactly these bits. A cleared commit gets the panel's report appended to its own tool result.
+- **A `git commit` gate.** A commit run through bash is blocked unless the panel has cleared the working tree as it stands. A cleared commit gets the panel's report appended to its own tool result, along with a warning if the commit shipped bytes the panel never read.
 - **`/review`** runs the panel by hand. **`/review-skip <reason>`** lets one commit through unreviewed. Only the user can do that, and the model is told it was the user's call.
 - **A system-prompt section** (`prompts/rules.md`) telling the model how to work with the gate: call it before committing, LOWs are advisory, an overturn means commit now without edits, never re-path a change to dodge a reviewer.
 
@@ -54,7 +54,11 @@ If `PI_BASH_MAX_TIMEOUT` is set, the gate never raises a cleared commit's bash t
 
 ## How it works
 
-**Changeset.** The working tree against HEAD, tracked changes and untracked file content, hashed with sha256 (`src/changeset.ts`). The index plays no part: every read goes through a scratch index built from HEAD, so staging never changes the hash or what the panel reads. After a commit, the committed bytes are checked against the reviewed worktree, which catches a stale or partial stage. The patch is written to the record store and handed to reviewers as a path. The reviewed worktree is also written as a git tree object, so two reviews can be diffed exactly.
+**Changeset.** The working tree against HEAD, tracked changes and untracked file content, hashed with sha256 (`src/changeset.ts`). The index plays no part: every read goes through a scratch index built from HEAD, so staging never changes the hash or what the panel reads.
+
+That makes the review a review of the working tree, not of the commit. The two usually match, because the model is told to commit what it had reviewed, and the gate checks afterwards. Committing part of the reviewed tree is fine: the panel read more than shipped. Committing bytes the panel never read, such as a stale stage left over from earlier, is reported in the commit's result. It is reported rather than blocked, because the commit has already happened by the time the hook can compare.
+
+The patch is written to the record store and handed to reviewers as a path. The reviewed worktree is also written as a git tree object, so two reviews can be diffed exactly.
 
 **Reuse.** A reviewer's PROCEED counts only for the exact changeset hash *and* the exact spec that produced it, so editing a reviewer's prompt invalidates its verdicts. Anything else re-runs, including a prior BLOCK.
 
@@ -64,7 +68,7 @@ If `PI_BASH_MAX_TIMEOUT` is set, the gate never raises a cleared commit's bash t
 
 **Panel integrity.** A spec that will not parse, or a stray non-spec file in the panel directory, fails the gate outright rather than dropping that reviewer. "Every reviewer PROCEEDed" is a claim about who was in the room.
 
-**The commit hook.** Every bash command is checked for `git` at a command position with `commit` as its subcommand (`src/commit.ts`). Without a PROCEED for these bits, the reviewers that owe one run, and a BLOCK blocks the call with the full reports attached. After the command, the tree is re-checked, because the verdict was computed before the command ran: a command that writes files and commits in one go is reported as committed on a stale verdict.
+**The commit hook.** Every bash command is checked for `git` at a command position with `commit` as its subcommand (`src/commit.ts`). Without a PROCEED for the working tree as it stands, the reviewers that owe one run, and a BLOCK blocks the call with the full reports attached. After the command, the tree is re-checked, because the verdict was computed before the command ran: a command that writes files and commits in one go is reported as committed on a stale verdict.
 
 Deliberate limits:
 

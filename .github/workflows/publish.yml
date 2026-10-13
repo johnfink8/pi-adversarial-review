@@ -12,6 +12,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      # Cheap and decisive, so before anything slow.
+      - name: Verify the release can be published
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          # npm publish without --tag makes any version `latest`, so a prerelease
+          # would become everyone's default install.
+          if [ "$PRERELEASE" = "true" ] || [[ "$PKG_VERSION" == *-* ]]; then
+            echo "prereleases are not published by this workflow ($PKG_VERSION, prerelease=$PRERELEASE)"
+            exit 1
+          fi
+          grep -qF "## [$PKG_VERSION] - " CHANGELOG.md \
+            || { echo "CHANGELOG.md has no '## [$PKG_VERSION] - <date>' entry"; exit 1; }
+
       - uses: actions/setup-node@v6
         with:
           node-version: '24.x'
@@ -20,6 +41,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - run: node scripts/check-pack.mjs
 
   publish:
     needs: check
@@ -35,19 +57,4 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - run: npm install
-
-      - name: Verify tag matches package.json version
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
-            exit 1
-          fi
-
-      - name: Verify CHANGELOG has an entry for this version
-        run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          grep -q "^## \[$PKG_VERSION\]" CHANGELOG.md || { echo "CHANGELOG.md has no ## [$PKG_VERSION] entry"; exit 1; }
-
       - run: npm publish --provenance --access public

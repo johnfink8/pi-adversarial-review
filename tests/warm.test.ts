@@ -65,6 +65,7 @@ describe("warm sessions", () => {
     const repo = tempRepo();
     const warnings: string[] = [];
     repo.write("a.txt", "two\n");
+    const warmDir = (head: string) => path.join(repoDir(repo.root), "warm", head);
     const before = await captureChangeset(repo.root);
     await keepWarm(
       repo.root,
@@ -72,12 +73,22 @@ describe("warm sessions", () => {
       { agent: "rev", specHash: "spec1", sessionId: "sid-1", tree: before.tree, changesetHash: before.hash },
       fakeSession(),
     );
+    expect(fs.existsSync(warmDir(before.head))).toBe(true);
+
     repo.git("add", "-A");
     repo.git("commit", "-qm", "landed");
-    const after = await captureChangeset(repo.root).catch(() => undefined);
-    const head = after?.head ?? repo.git("rev-parse", "HEAD");
-    await pruneWarm(repo.root, head, warnings);
-    expect(fs.existsSync(path.join(repoDir(repo.root), "warm", before.head))).toBe(false);
+    repo.write("a.txt", "three\n");
+    const after = await captureChangeset(repo.root);
+    await keepWarm(
+      repo.root,
+      after.head,
+      { agent: "rev", specHash: "spec1", sessionId: "sid-2", tree: after.tree, changesetHash: after.hash },
+      fakeSession(),
+    );
+
+    await pruneWarm(repo.root, after.head, warnings);
+    expect(fs.existsSync(warmDir(before.head))).toBe(false);
+    expect(fs.existsSync(warmDir(after.head))).toBe(true);
     expect(warnings).toEqual([]);
   });
 });

@@ -12,7 +12,7 @@ First public release.
 ### Added
 
 - **`adversarial_review` tool** that runs a panel of reviewer agents over the working tree against HEAD and returns the panel's verdict, every finding, and the path to each full report.
-- **`git commit` gate.** A commit run through bash is blocked unless the panel cleared exactly these bits. A cleared commit gets the panel's report appended to its result, and is re-checked afterwards in case the command changed the tree.
+- **`git commit` gate.** A commit run through bash is blocked unless the panel has cleared the working tree as it stands. A cleared commit gets the panel's report appended to its result, and is re-checked afterwards in case it shipped bytes the panel never read.
 - **A moderator** who reads every report when the panel blocks, and either upholds the block or overturns it.
 - **Five bundled reviewers** (`assumption-auditor`, `fail-loud-reviewer`, `requirement-fitter`, `type-safety-reviewer`, `code-style-reviewer`) and a bundled moderator. A user directory replaces either set whole.
 - **Warm re-reviews.** On the same HEAD, each panel member resumes its earlier session and is shown only what changed since its last pass.
