@@ -8,4 +8,4 @@ An adversarial review gate for the pi coding agent. A panel of reviewer agents e
 
 **Stage:** early release (0.1.x), pre-1.0, used daily by the author.
 
-**Plan of work:** there is no roadmap file; work is session-driven. Pending ideas live in the GitHub issue tracker.
+**Plan of work:** `TODO.md` in the working tree is author-local and **untracked** — it holds specs for the features in flight and review notes carried forward from earlier rounds; check it before proposing work, and update it when work there lands. If it is absent (fresh clone), the shared plan lives in the GitHub issue tracker — do not silently proceed over planned work.
