@@ -520,6 +520,9 @@ async function runPanel(
 
     for (const { member, result, delta } of results) {
       const name = member.agent.name;
+      // Retry notes ride the result so they survive both passes; a verdict
+      // earned across retries is part of the record.
+      for (const note of result.retryNotes) warnings.push(`${name}: ${note}`);
       if (delta === undefined) ranWarm.delete(name);
       else ranWarm.add(name);
       let usable = false;
@@ -765,6 +768,7 @@ async function moderate(
     );
     let usable = false;
     try {
+      for (const note of result.retryNotes) warnings.push(`${name}: ${note}`);
       const output = getFinalOutput(result.messages);
       reportPath = await writeReport(changeset.repoRoot, changeset.hash, name, output || result.stderr);
       model = result.model ?? "session default";

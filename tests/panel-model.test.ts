@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { verifyPanelModel } from "../src/gate.ts";
 import { assertExactPanelModel, type PanelModelCandidate } from "../src/panel-model.ts";
 
 const candidate = (provider: string, id: string, name?: string): PanelModelCandidate => ({
@@ -77,5 +78,43 @@ describe("assertExactPanelModel", () => {
     expect(() => assertExactPanelModel("dup/model", [candidate("dup", "model"), candidate("dup", "model")])).toThrow(
       /ambiguous/,
     );
+  });
+});
+
+describe("verifyPanelModel", () => {
+  it("passes when the child reports the canonical provider/id", () => {
+    expect(
+      verifyPanelModel("openrouter/deepseek/deepseek-v4.1-flash-1017", {
+        model: "openrouter/deepseek/deepseek-v4.1-flash-1017",
+        reportedModel: "openrouter/deepseek/deepseek-v4.1-flash-1017",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("fails when the child reports a different model", () => {
+    expect(
+      verifyPanelModel("openrouter/deepseek/deepseek-v4.1-flash-1017", {
+        model: "openrouter/deepseek/deepseek-v4.1-flash-1017",
+        reportedModel: "openrouter/~deepseek/deepseek-flash-latest",
+      }),
+    ).toContain("reports it ran on openrouter/~deepseek/deepseek-flash-latest");
+  });
+
+  it("fails when the child never reports a model at all", () => {
+    expect(
+      verifyPanelModel("openrouter/deepseek/deepseek-v4.1-flash-1017", {
+        model: "openrouter/deepseek/deepseek-v4.1-flash-1017",
+        reportedModel: undefined,
+      }),
+    ).toContain("could not be confirmed");
+  });
+
+  it("does not apply to a member running on its own or the session's model", () => {
+    expect(
+      verifyPanelModel("openrouter/deepseek/deepseek-v4.1-flash-1017", {
+        model: "other-provider/own-model",
+        reportedModel: "other-provider/own-model",
+      }),
+    ).toBeUndefined();
   });
 });

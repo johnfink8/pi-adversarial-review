@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rate-limit retries with backoff**: a panel member that fails on a provider 429 retries up to three times (5s → 15s → 45s with jitter, or the provider's `Retry-After` when it names one), releasing its concurrency slot while waiting and restarting from its warm seed. Each retry is recorded in the report's warnings; anything else still fails after the panel's one re-run.
 - **`model` in `review-gate.json`**: the `provider/id` that panel members without their own `model:` run on, in place of the session's model. Resolution is strict — an exact registry entry, or a custom id on a known provider sent to the provider verbatim; a fuzzy match fails before the panel runs, and each member's reported model is checked against the configured value when the panel runs.
 
 ### Changed

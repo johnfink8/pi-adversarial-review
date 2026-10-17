@@ -63,6 +63,12 @@ export interface SingleResult {
    */
   reportedModel?: string | undefined;
   /**
+   * One line per rate-limit retry this run spent. Kept off stderr — which the
+   * report drops on a successful run — so a verdict earned across retries is
+   * auditable; the panel folds these into its report warnings.
+   */
+  retryNotes: string[];
+  /**
    * The child's session on disk, when the caller asked to keep it
    * (`SingleAgentRequest.session`). The caller owns it from here and must remove it.
    */
@@ -104,6 +110,85 @@ export function isFailedResult(result: SingleResult): boolean {
     result.stopReason === "aborted" ||
     result.droppedEvents > 0
   );
+}
+
+/** How a finished run failed, as far as the parent can tell from stderr and messages. */
+export type FailureKind = "rate-limit" | "other";
+
+const RATE_LIMIT_PATTERN = /\b429\b|rate.?limit/i;
+/** Retries per run: the first attempt plus this many rate-limit retries. */
+const RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_ATTEMPTS = RATE_LIMIT_RETRIES + 1;
+/** Retry wait bounds per retry: jittered inside [base/2, base). */
+const RATE_LIMIT_BACKOFF_MS = [5_000, 15_000, 45_000];
+/** A Retry-After beyond this is treated as unusable rather than waited on. */
+const RETRY_AFTER_MAX_MS = 600_000;
+
+export function classifyFailure(result: SingleResult): FailureKind {
+  let lastError = "";
+  for (let i = result.messages.length - 1; i >= 0; i -= 1) {
+    const message = result.messages[i];
+    if (message.role === "assistant") {
+      if (typeof message.errorMessage === "string") lastError = message.errorMessage;
+      break;
+    }
+  }
+  return RATE_LIMIT_PATTERN.test(`${result.stderr}\n${lastError}`) ? "rate-limit" : "other";
+}
+
+function retryAfterMs(stderr: string): number | undefined {
+  // Bare seconds is the conventional header form; some providers append a unit.
+  const matches = [...stderr.matchAll(/retry-after:\s*(\d+(?:\.\d+)?)\s*(?:s\b)?/gi)];
+  const last = matches.at(-1);
+  if (last === undefined) return undefined;
+  const ms = Number(last[1]) * 1000;
+  return ms > 0 && ms <= RETRY_AFTER_MAX_MS ? ms : undefined;
+}
+
+function jitteredBackoffMs(retry: number): number {
+  const base = RATE_LIMIT_BACKOFF_MS[Math.min(retry, RATE_LIMIT_BACKOFF_MS.length - 1)];
+  // Floored at half the base: a rate limit that needs a real pause must not
+  // be answered with a ~0ms retry that spends the budget in under a minute.
+  return Math.floor(base / 2 + Math.random() * (base / 2));
+}
+
+export function rateLimitRetryDelay(attempt: number, result: SingleResult): number | undefined {
+  if (attempt >= RATE_LIMIT_RETRIES) return undefined;
+  if (result.stopReason === "aborted") return undefined;
+  if (!isFailedResult(result)) return undefined;
+  if (classifyFailure(result) !== "rate-limit") return undefined;
+  return retryAfterMs(result.stderr) ?? jitteredBackoffMs(attempt);
+}
+
+/** Resolves after ms, immediately on an abort — including one already fired. */
+export function sleepFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  if (signal === undefined) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => finish();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function removeSessionDir(dir: string, result: SingleResult): Promise<void> {
+  try {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    // A cleanup hiccup must not replace a finished run's result with a
+    // failure, but it is not invisible either: the leftover session dir would
+    // be re-entered by a later --resume, so name it on stderr.
+    result.stderr += `could not remove the subagent session dir ${dir} (${describeError(error)}); it was left behind\n`;
+  }
 }
 
 /** Keeps one task's output inside the tool result without cutting mid-codepoint. */
@@ -268,6 +353,7 @@ export async function runSingleAgent<T>(
       stderr: `Unknown agent: "${agentName}". Available agents: ${available}.${skippedNote}`,
       usage: emptyUsage(),
       droppedEvents: 0,
+      retryNotes: [],
       step,
     };
   }
@@ -281,7 +367,7 @@ export async function runSingleAgent<T>(
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
-  let sessionDir: string | null = null;
+  let lastSessionDir: string | null = null;
 
   const currentResult: SingleResult = {
     agent: agent.name,
@@ -293,6 +379,7 @@ export async function runSingleAgent<T>(
     stderr: "",
     usage: emptyUsage(),
     droppedEvents: 0,
+    retryNotes: [],
     model: agent.model,
     step,
   };
@@ -306,71 +393,129 @@ export async function runSingleAgent<T>(
     }
   };
 
-  let holdsSlot = false;
-  let handedBack = false;
+  const model = agent.model ?? dispatch.model;
+  currentResult.model = model;
+  const sessionId = session?.id ?? randomUUID();
+
+  if (agent.systemPrompt.trim()) {
+    const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+    tmpPromptDir = tmp.dir;
+    tmpPromptPath = tmp.filePath;
+    baseArgs.push("--append-system-prompt", tmpPromptPath);
+  }
+
   try {
-    try {
-      await dispatch.gate.acquire(signal);
-      holdsSlot = true;
-    } catch (error) {
-      if (!signal?.aborted) throw error;
-      return {
-        ...currentResult,
-        status: "done",
-        exitCode: 1,
-        stopReason: "aborted",
-        errorMessage: `Subagent "${agentName}" was aborted before it could start`,
-      };
+    for (let attempt = 0; ; attempt += 1) {
+      let holdsSlot = false;
+      let attemptSessionDir: string | null = null;
+      let stderrBase = 0;
+      try {
+        try {
+          await dispatch.gate.acquire(signal);
+          holdsSlot = true;
+        } catch (error) {
+          if (!signal?.aborted) throw error;
+          return {
+            ...currentResult,
+            status: "done",
+            exitCode: 1,
+            stopReason: "aborted",
+            errorMessage: `Subagent "${agentName}" was aborted before it could start`,
+          };
+        }
+        if (attempt > 0) {
+          // A retry starts from the seed again: the failed attempt never
+          // produced a usable verdict, and mixing its partial conversation
+          // into the fresh attempt would make the result unattributable.
+          // stderr is not reset: it is append-only audit, and the retry
+          // decision below classifies against this attempt's slice only.
+          currentResult.messages = [];
+          currentResult.usage = emptyUsage();
+          currentResult.droppedEvents = 0;
+          currentResult.exitCode = null;
+          currentResult.stopReason = undefined;
+          currentResult.errorMessage = undefined;
+          currentResult.terminationSignal = undefined;
+          currentResult.reportedModel = undefined;
+        }
+        stderrBase = currentResult.stderr.length;
+        currentResult.status = "running";
+
+        // The child keeps its session in a temp dir rather than the user's
+        // session store; a caller that asked for it gets it back to resume later.
+        attemptSessionDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-session-"));
+        lastSessionDir = attemptSessionDir;
+        if (session?.seedDir !== undefined)
+          await fs.promises.cp(session.seedDir, attemptSessionDir, { recursive: true });
+        emitUpdate();
+
+        let wasAborted = false;
+        const args = [
+          ...baseArgs,
+          "--session-dir",
+          attemptSessionDir,
+          "--session-id",
+          sessionId,
+          ...(model ? ["--model", model] : []),
+          `Task: ${task}`,
+        ];
+        const outcome = await runProcess(args, cwd ?? defaultCwd, signal, currentResult, emitUpdate, () => {
+          wasAborted = true;
+        });
+
+        currentResult.status = "done";
+        currentResult.exitCode = outcome.code;
+        if (outcome.signal) currentResult.terminationSignal = outcome.signal;
+        if (wasAborted) {
+          currentResult.stopReason = "aborted";
+          currentResult.errorMessage = `Subagent "${agentName}" was aborted`;
+        } else if (outcome.code === 0 && currentResult.messages.length === 0) {
+          currentResult.stopReason = "error";
+          currentResult.errorMessage =
+            currentResult.stderr.trim() || `Subagent "${agentName}" produced no stream events`;
+        }
+      } finally {
+        if (holdsSlot) dispatch.gate.release();
+      }
+
+      // Classify and parse against only this attempt's output: stderr is
+      // append-only across attempts, so a genuine 429 in attempt 1 must not
+      // make attempt 2's unrelated crash read as a rate limit.
+      const attemptStderr = currentResult.stderr.slice(stderrBase);
+      const waitMs = rateLimitRetryDelay(attempt, { ...currentResult, stderr: attemptStderr });
+      if (waitMs === undefined) break;
+      if (attemptSessionDir !== null) {
+        await removeSessionDir(attemptSessionDir, currentResult);
+        lastSessionDir = null;
+      }
+      const waitSeconds = Math.max(1, Math.round(waitMs / 1000));
+      const note = `rate-limited by the provider; retrying (attempt ${attempt + 2} of ${RATE_LIMIT_ATTEMPTS}) after ${waitSeconds}s`;
+      currentResult.retryNotes.push(note);
+      currentResult.status = "queued";
+      emitUpdate();
+      await sleepFor(waitMs, signal);
+      if (signal?.aborted) {
+        currentResult.status = "done";
+        currentResult.stopReason = "aborted";
+        currentResult.errorMessage = `Subagent "${agentName}" was aborted while waiting to retry a rate-limited run`;
+        break;
+      }
     }
-    currentResult.status = "running";
 
-    if (agent.systemPrompt.trim()) {
-      const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
-      tmpPromptDir = tmp.dir;
-      tmpPromptPath = tmp.filePath;
-      baseArgs.push("--append-system-prompt", tmpPromptPath);
-    }
-
-    // The child keeps its session in a temp dir rather than the user's session
-    // store; a caller that asked for it gets it back to resume later.
-    sessionDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-session-"));
-    if (session?.seedDir !== undefined) await fs.promises.cp(session.seedDir, sessionDir, { recursive: true });
-    const sessionId = session?.id ?? randomUUID();
-    const model = agent.model ?? dispatch.model;
-    currentResult.model = model;
-    emitUpdate();
-
-    let wasAborted = false;
-    const args = [
-      ...baseArgs,
-      "--session-dir",
-      sessionDir,
-      "--session-id",
-      sessionId,
-      ...(model ? ["--model", model] : []),
-      `Task: ${task}`,
-    ];
-    const outcome = await runProcess(args, cwd ?? defaultCwd, signal, currentResult, emitUpdate, () => {
-      wasAborted = true;
-    });
-
-    currentResult.status = "done";
-    currentResult.exitCode = outcome.code;
-    if (outcome.signal) currentResult.terminationSignal = outcome.signal;
-    if (wasAborted) {
-      currentResult.stopReason = "aborted";
-      currentResult.errorMessage = `Subagent "${agentName}" was aborted`;
-    } else if (outcome.code === 0 && currentResult.messages.length === 0) {
-      currentResult.stopReason = "error";
-      currentResult.errorMessage = currentResult.stderr.trim() || `Subagent "${agentName}" produced no stream events`;
-    }
-    if (session !== undefined) {
-      currentResult.session = { dir: sessionDir, id: sessionId };
-      handedBack = true;
+    if (session !== undefined && lastSessionDir !== null) {
+      currentResult.session = { dir: lastSessionDir, id: sessionId };
     }
     return currentResult;
   } finally {
-    if (holdsSlot) dispatch.gate.release();
+    // The handback is recorded on the result; anything still here was not
+    // handed back and would be re-entered by a later --resume if left behind.
+    if (lastSessionDir !== null && currentResult.session === undefined) {
+      try {
+        fs.rmSync(lastSessionDir, { recursive: true, force: true });
+      } catch (error) {
+        currentResult.stderr += `could not remove the subagent session dir ${lastSessionDir} (${describeError(error)}); it was left behind\n`;
+      }
+    }
     if (tmpPromptPath)
       try {
         fs.unlinkSync(tmpPromptPath);
@@ -383,17 +528,6 @@ export async function runSingleAgent<T>(
       } catch {
         /* ignore */
       }
-    if (sessionDir && !handedBack) {
-      // A cleanup hiccup must not replace a finished run's result with a
-      // failure, but it is not invisible either: the leftover session dir
-      // would be re-entered by a later --resume, so name it on stderr.
-      try {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-      } catch (error) {
-        currentResult.stderr += `could not remove the subagent session dir ${sessionDir} (${describeError(error)}); it was left behind
-`;
-      }
-    }
   }
 }
 
