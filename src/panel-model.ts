@@ -64,3 +64,41 @@ export function assertExactPanelModel(configured: string, models: readonly Panel
   // verbatim, under the provider's registry casing.
   return `${providerModels[0].provider}/${pattern}`;
 }
+
+/**
+ * Per-session panel model overrides (`/review-model`). Memory-only by design:
+ * a new pi process starts empty, so the configured model resumes on the next
+ * instance, and keying by session id keeps concurrently running sessions
+ * isolated from each other's choices.
+ */
+export class PanelModelOverrides {
+  private readonly bySession = new Map<string, string>();
+
+  constructor(private readonly maxSessions: number) {}
+
+  set(session: string, model: string): void {
+    // Delete first so re-settling a session refreshes its recency: a Map
+    // preserves insertion order, so an in-place set would let the oldest
+    // session be evicted by the next newcomer.
+    this.bySession.delete(session);
+    if (this.bySession.size >= this.maxSessions) {
+      const oldest = this.bySession.keys().next();
+      if (!oldest.done) this.bySession.delete(oldest.value);
+    }
+    this.bySession.set(session, model);
+  }
+
+  /** Has this session stored an override? Drives the report's provenance tag. */
+  has(session: string): boolean {
+    return this.bySession.has(session);
+  }
+
+  clear(session: string): void {
+    this.bySession.delete(session);
+  }
+
+  /** The session's override wins; the configured model is the fallback. */
+  resolve(session: string, configured: string | undefined): string | undefined {
+    return this.bySession.get(session) ?? configured;
+  }
+}

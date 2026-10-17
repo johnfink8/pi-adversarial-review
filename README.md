@@ -8,7 +8,7 @@ It exists for long autonomous runs: a model working toward a goal for hours comm
 
 - **`adversarial_review`**, a tool the model calls before committing. It returns the panel's verdict, every finding, and the path of each full report.
 - **A `git commit` gate.** A commit run through bash is blocked unless the panel has cleared the working tree as it stands. A cleared commit gets the panel's report appended to its own tool result, along with a warning if the commit shipped bytes the panel never read.
-- **`/review`** runs the panel by hand. **`/review-skip <reason>`** lets one commit through unreviewed. Only the user can do that, and the model is told it was the user's call.
+- **`/review`** runs the panel by hand. **`/review-model [<provider/id> | clear]`** picks the panel's model for this session only — no argument opens a selector over the registry, `clear` (or `default`) returns to the config default, and the model must be a `provider/id` string validated against the registry at set time. The report header names it as a session override and scopes it to members without their own model. Resets on a new pi instance; invisible to other sessions. **`/review-skip <reason>`** lets one commit through unreviewed. Only the user can do that, and the model is told it was the user's call.
 - **A system-prompt section** (`prompts/rules.md`) telling the model how to work with the gate: call it before committing, LOWs are advisory, an overturn means commit now without edits, never re-path a change to dodge a reviewer.
 
 ## The panel

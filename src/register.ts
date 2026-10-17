@@ -20,13 +20,15 @@ import {
 } from "./changeset.ts";
 import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.ts";
 import { type ReviewDeps, type ReviewOutcome, type ReviewRequest, runReview } from "./gate.ts";
-import { assertExactPanelModel } from "./panel-model.ts";
+import { assertExactPanelModel, PanelModelOverrides } from "./panel-model.ts";
 import { type LineRole, type PanelProgress, type ProgressLine, renderProgress } from "./progress.ts";
 import { CHILD_ENV } from "./runner.ts";
 import { describeError } from "./util.ts";
 
 const STATUS_KEY = "adversarial-review";
 const WIDGET_KEY = "adversarial-review";
+/** The selector entry that clears a session override, back to the config default. */
+const DEFAULT_MODEL_CHOICE = "— config default —";
 /** LineRole → theme foreground token. */
 const ROLE_COLOR: Record<LineRole, Parameters<ExtensionContext["ui"]["theme"]["fg"]>[0]> = {
   header: "toolTitle",
@@ -90,6 +92,8 @@ const intents = new Map<string, string>();
 
 /** One-shot commit authorizations, armed only by the user through /review-skip. */
 const skips = new Map<string, string>();
+/** Per-session panel model overrides; memory-only, see PanelModelOverrides. */
+const panelModels = new PanelModelOverrides(MAX_TRACKED_SESSIONS);
 
 /** Gate reports waiting to be appended to the commit's own tool result, by call id. */
 const pendingReports = new Map<string, PendingReport>();
@@ -124,9 +128,21 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
    * of the model it ran on all name the same model.
    */
   const runGate = (ctx: ExtensionContext, request: ReviewRequest): Promise<ReviewOutcome> => {
-    if (deps.model === undefined) return runReview(deps, request);
-    const model = assertExactPanelModel(deps.model, ctx.modelRegistry.getAll());
-    return runReview({ ...deps, model }, request);
+    const configured = panelModels.resolve(ctx.sessionManager.getSessionId(), deps.model);
+    if (configured === undefined) return runReview(deps, request);
+    const model = assertExactPanelModel(configured, ctx.modelRegistry.getAll());
+    return runReview(
+      {
+        ...deps,
+        model,
+        // Provenance from key presence, not string equality: an override set
+        // to the same id as the config is still a session override.
+        modelSource: panelModels.has(ctx.sessionManager.getSessionId())
+          ? "session override via /review-model"
+          : undefined,
+      },
+      request,
+    );
   };
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -260,6 +276,36 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
       } catch (error) {
         ctx.ui.notify(`Adversarial review could not run: ${describeError(error)}`, "error");
       }
+    },
+  });
+
+  pi.registerCommand("review-model", {
+    description: "Choose the review panel's model for this session (resets on a new pi instance)",
+    handler: async (args, ctx) => {
+      const session = ctx.sessionManager.getSessionId();
+      // What the panel runs on after a clear: the config model when one is
+      // set, otherwise the session's own model.
+      const fallback = deps.model === undefined ? "session model" : "config default";
+      const arg = args.trim();
+      if (arg === "clear" || arg === "default") {
+        panelModels.clear(session);
+        ctx.ui.notify(`Panel model for this session: ${fallback}`, "info");
+        return;
+      }
+      if (arg === "") {
+        const current = panelModels.resolve(session, deps.model);
+        const options = [DEFAULT_MODEL_CHOICE, ...ctx.modelRegistry.getAll().map((m) => `${m.provider}/${m.id}`)];
+        const choice = await ctx.ui.select(`Panel model for this session (now: ${current ?? fallback})`, options);
+        if (choice === undefined) return;
+        if (choice === DEFAULT_MODEL_CHOICE) {
+          panelModels.clear(session);
+          ctx.ui.notify(`Panel model for this session: ${fallback}`, "info");
+          return;
+        }
+        setPanelModel(ctx, session, choice);
+        return;
+      }
+      setPanelModel(ctx, session, arg);
     },
   });
 
@@ -460,6 +506,27 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
     if (!oldest.done) map.delete(oldest.value);
   }
   map.set(key, value);
+}
+
+/**
+ * Validate and store a session's panel model at the moment the user picks it —
+ * the registry is in scope here, so a bad id fails at set time rather than
+ * three minutes into a panel run. The runGate re-check still guards registry
+ * drift between now and the run.
+ */
+function setPanelModel(ctx: ExtensionContext, session: string, model: string): void {
+  if (!model.includes("/")) {
+    ctx.ui.notify(`Panel model must be a "provider/id" string, got "${model}"`, "error");
+    return;
+  }
+  try {
+    assertExactPanelModel(model, ctx.modelRegistry.getAll());
+  } catch (error) {
+    ctx.ui.notify(describeError(error), "error");
+    return;
+  }
+  panelModels.set(session, model);
+  ctx.ui.notify(`Panel model for this session: ${model} (resets on a new pi instance)`, "info");
 }
 
 function skipReport(reason: string): string {

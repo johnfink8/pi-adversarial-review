@@ -62,6 +62,8 @@ export interface ReviewDeps {
   gate: Semaphore;
   /** `provider/id` for panel members without their own `model:`; unset means the session's model. */
   model?: string | undefined;
+  /** Where `model` came from, shown beside it in the report; unset for the config default. */
+  modelSource?: string | undefined;
 }
 
 export interface ReviewRequest {
@@ -815,7 +817,7 @@ async function runPanel(
     snapshot: changeset.snapshot,
     report: "",
   };
-  outcome.report = renderReport(outcome, changeset, request);
+  outcome.report = renderReport(outcome, changeset, request, deps);
   return outcome;
 }
 
@@ -1058,7 +1060,7 @@ export function advisoryGuidance(outcome: Pick<ReviewOutcome, "cleared" | "verdi
   ].join("\n");
 }
 
-function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: ReviewRequest): string {
+function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: ReviewRequest, deps: ReviewDeps): string {
   const ran = outcome.reviewers.filter((r) => r.ran);
   const cached = outcome.reviewers.filter((r) => !r.ran);
 
@@ -1070,6 +1072,13 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
       `Repo ${outcome.repoRoot}`,
       `Changeset ${outcome.changesetHash.slice(0, 16)} — ${outcome.files.length} file(s), ${Math.max(1, Math.round(changeset.patchBytes / 1024))} KiB`,
       `Trigger ${request.trigger}. Intent judged against: ${request.intent}`,
+      ...(deps.model === undefined
+        ? []
+        : [
+            // Not a claim about the whole panel: specs can pin their own
+            // `model:`, and the reviewer index carries each member's.
+            `Panel model ${deps.model}${deps.modelSource === undefined ? "" : ` (${deps.modelSource})`} — for members without their own model`,
+          ]),
       `Panel ${outcome.reviewers.length}: ${cached.length} already PROCEED for these bits, ${ran.length} reviewed now (${ran.filter((r) => r.warm).length} resumed from their last review on this HEAD).`,
       `Record ${outcome.recordPath}`,
       `Full reports and the patch: ${outcome.reportsDir}`,
@@ -1125,6 +1134,7 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
     ...outcome.reviewers.map(
       (r) =>
         `- ${r.agent}: ${r.verdict}${r.ran ? (r.warm ? " (warm)" : " (cold)") : " (cached, not re-run)"}, ${r.findings.length} finding(s), ${r.cleared.length} cleared` +
+        (r.model === "" ? "" : `, model ${r.model}`) +
         `${r.note ? ` — note: ${r.note}` : ""}\n  Report: ${r.reportPath}`,
     ),
   ];

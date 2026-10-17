@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { verifyPanelModel } from "../src/gate.ts";
-import { assertExactPanelModel, type PanelModelCandidate } from "../src/panel-model.ts";
+import { assertExactPanelModel, type PanelModelCandidate, PanelModelOverrides } from "../src/panel-model.ts";
 
 const candidate = (provider: string, id: string, name?: string): PanelModelCandidate => ({
   provider,
@@ -116,5 +116,50 @@ describe("verifyPanelModel", () => {
         reportedModel: "other-provider/own-model",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("PanelModelOverrides", () => {
+  const overrides = () => new PanelModelOverrides(3);
+
+  it("lets the session override win over the configured model", () => {
+    const store = overrides();
+    expect(store.resolve("s1", "prov/configured")).toBe("prov/configured");
+    store.set("s1", "prov/override");
+    expect(store.resolve("s1", "prov/configured")).toBe("prov/override");
+  });
+
+  it("falls back to the configured model after clearing", () => {
+    const store = overrides();
+    store.set("s1", "prov/override");
+    store.clear("s1");
+    expect(store.resolve("s1", "prov/configured")).toBe("prov/configured");
+  });
+
+  it("keeps sessions isolated from each other", () => {
+    const store = overrides();
+    store.set("s1", "prov/one");
+    expect(store.resolve("s2", "prov/configured")).toBe("prov/configured");
+    expect(store.resolve("s1", "prov/configured")).toBe("prov/one");
+  });
+
+  it("evicts the oldest session past the bound", () => {
+    const store = overrides();
+    store.set("s1", "prov/one");
+    store.set("s2", "prov/two");
+    store.set("s3", "prov/three");
+    store.set("s4", "prov/four");
+    expect(store.resolve("s1", undefined)).toBeUndefined();
+    expect(store.resolve("s4", undefined)).toBe("prov/four");
+  });
+
+  it("re-settling a session refreshes without evicting it", () => {
+    const store = overrides();
+    store.set("s1", "prov/one");
+    store.set("s2", "prov/two");
+    store.set("s3", "prov/three");
+    store.set("s1", "prov/one-b");
+    store.set("s4", "prov/four");
+    expect(store.resolve("s1", undefined)).toBe("prov/one-b");
   });
 });
