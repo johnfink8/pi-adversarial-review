@@ -12,6 +12,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import { type Changeset, captureChangeset, type Interdiff, type TreeSnapshot, writeInterdiff } from "./changeset.ts";
+import {
+  lastActivityLines,
+  type MemberProgress,
+  type MemberState,
+  type PanelProgress,
+  stateForResult,
+} from "./progress.ts";
 import { loadPrompt } from "./prompts.ts";
 import {
   approvalProtocol,
@@ -41,6 +48,7 @@ import {
   type DispatchHost,
   getFinalOutput,
   isFailedResult,
+  type MemberUpdate,
   runSingleAgent,
   type SingleResult,
   truncateOutput,
@@ -64,6 +72,8 @@ export interface ReviewRequest {
   context: string;
   trigger: "manual" | "commit";
   signal: AbortSignal | undefined;
+  /** Live panel readout; absent when nobody is watching (e.g. tests). */
+  onProgress?: ((snapshot: PanelProgress) => void) | undefined;
 }
 
 export interface ModerationSummary {
@@ -493,10 +503,87 @@ async function runPanel(
   const prose = new Map<string, string>();
   const ranWarm = new Set<string>();
 
+  // The live readout. Replaced wholesale per update — assembling a fresh
+  // MemberProgress is cheap, and merge semantics would leave stale activity
+  // lines behind a member that just finished.
+  const runStartedAt = Date.now();
+  const progress = new Map<string, MemberProgress>();
+  let lastEmitAt = 0;
+  const PROGRESS_THROTTLE_MS = 250;
+  const ACTIVITY_LINES = 4;
+  const emitProgress = (force: boolean) => {
+    if (request.onProgress === undefined) return;
+    const now = Date.now();
+    if (!force && now - lastEmitAt < PROGRESS_THROTTLE_MS) return;
+    lastEmitAt = now;
+    request.onProgress({ phase: "running", members: [...progress.values()], startedAt: runStartedAt });
+  };
+  const markProgress = (update: MemberProgress, force: boolean) => {
+    progress.set(update.name, update);
+    emitProgress(force);
+  };
+  for (const member of panel) {
+    const owedThis = owed.some((m) => m.agent.name === member.agent.name);
+    progress.set(member.agent.name, {
+      name: member.agent.name,
+      state: owedThis ? "pending" : "cached",
+      detail: owedThis ? "" : "cached",
+      lastLines: [],
+    });
+  }
+  if (standing !== undefined) {
+    progress.set(moderator.agent.name, {
+      name: moderator.agent.name,
+      state: "moderated",
+      detail: "standing overturn (cached)",
+      lastLines: [],
+    });
+  }
+  emitProgress(true);
+
+  const memberUpdate =
+    (name: string, startedAt: number): MemberUpdate =>
+    (partial) => {
+      const result = partial.details.results[0];
+      markProgress(
+        {
+          name,
+          state: stateForResult(result),
+          detail: result.retryNotes.at(-1) ?? "",
+          lastLines: lastActivityLines(result.messages, ACTIVITY_LINES),
+          model: result.model,
+          usage: result.usage,
+          startedAt,
+        },
+        false,
+      );
+    };
+  const settleProgress = (name: string, result: SingleResult) => {
+    const recorded = states.get(name);
+    const state: MemberState =
+      recorded === undefined
+        ? "failed"
+        : recorded.verdict === "PROCEED"
+          ? "proceed"
+          : recorded.verdict === "BLOCK"
+            ? "block"
+            : isFailedResult(result)
+              ? "failed"
+              : "incomplete";
+    const detail =
+      state === "proceed" || state === "block"
+        ? `${recorded?.verdict} · ${recorded?.findings.length ?? 0} finding(s) · ${recorded?.cleared.length ?? 0} cleared`
+        : truncateOutput(recorded?.failure ?? "", 80);
+    markProgress({ name, state, detail, lastLines: lastActivityLines(result.messages, ACTIVITY_LINES) }, true);
+  };
+
   const dispatchPanel = async (members: PanelMember[]): Promise<PanelMember[]> => {
     if (members.length === 0) return [];
     const results = await Promise.all(
       members.map(async (member) => {
+        const name = member.agent.name;
+        const startedAt = Date.now();
+        markProgress({ name, state: "waiting", detail: "", lastLines: [], startedAt }, false);
         const { warm, delta } = await startFor(changeset, member, warnings);
         const task =
           warm.since === undefined || delta === undefined
@@ -508,10 +595,11 @@ async function runPanel(
           discovery,
           (partial: SingleResult[]) => ({ results: partial }),
           {
-            agentName: member.agent.name,
+            agentName: name,
             task,
             signal: request.signal,
             session: { seedDir: warm.seedDir, id: warm.sessionId },
+            onUpdate: memberUpdate(name, startedAt),
           },
         );
         return { member, result, delta };
@@ -601,6 +689,7 @@ async function runPanel(
         );
       } finally {
         await keepIfUsable(changeset, member, result, usable, warnings);
+        settleProgress(name, result);
       }
     }
 
@@ -645,7 +734,28 @@ async function runPanel(
           reportPath: standing.reportPath,
         };
   if (panelVerdict === "BLOCK" && standing === undefined && request.signal?.aborted !== true) {
-    const moderated = await moderate(changeset, request, dispatch, moderator, panel, states, warnings, deps.model);
+    const moderatorStartedAt = Date.now();
+    markProgress({ name: moderator.agent.name, state: "pending", detail: "reads every report", lastLines: [] }, true);
+    const moderated = await moderate(changeset, request, dispatch, moderator, panel, states, warnings, deps.model, {
+      onUpdate: memberUpdate(moderator.agent.name, moderatorStartedAt),
+    });
+    const summary = moderated.summary;
+    const moderatorState: MemberState =
+      summary.overturn === true ? "moderated" : summary.overturn === false ? "block" : "failed";
+    markProgress(
+      {
+        name: moderator.agent.name,
+        state: moderatorState,
+        detail:
+          summary.overturn === true
+            ? "overturned — cleared"
+            : summary.overturn === false
+              ? "upheld the block"
+              : truncateOutput(summary.failure, 80),
+        lastLines: [],
+      },
+      true,
+    );
     ruling = moderated.ruling;
     moderation = moderated.summary;
   }
@@ -734,6 +844,7 @@ async function moderate(
   states: Map<string, AgentState>,
   warnings: string[],
   panelModel: string | undefined,
+  progress?: { onUpdate: MemberUpdate } | undefined,
 ): Promise<{ ruling: Moderation | undefined; summary: ModerationSummary }> {
   const name = moderator.agent.name;
   const discovery: AgentDiscoveryResult = { agents: [moderator.agent], skipped: [] };
@@ -764,6 +875,7 @@ async function moderate(
         task,
         signal: request.signal,
         session: { seedDir: warm.seedDir, id: warm.sessionId },
+        onUpdate: progress?.onUpdate,
       },
     );
     let usable = false;
@@ -903,7 +1015,11 @@ function headline(outcome: ReviewOutcome): string {
 
 function closingInstruction(outcome: ReviewOutcome): string {
   if (outcome.verdict === "PROCEED") {
-    return "Verdict PROCEED — no reviewer has a blocking finding on these exact bits. Committing is cleared; any change to the tree invalidates it.";
+    return (
+      "Verdict PROCEED — no reviewer has a blocking finding on these exact bits. Committing is cleared, and the " +
+      "clearance covers the whole reviewed tree: commit all of it in one commit — splitting it into several " +
+      "commits moves the changeset hash and sends the remainder back through the panel."
+    );
   }
   if (outcome.verdict === "INCOMPLETE") {
     return "Verdict INCOMPLETE — the panel did not complete, so this is not a pass. Treat it as unreviewed and retry.";
@@ -935,7 +1051,7 @@ export function advisoryGuidance(outcome: Pick<ReviewOutcome, "cleared" | "verdi
   const counts = [lows > 0 ? `${lows} LOW` : "", overturned > 0 ? `${overturned} overturned` : ""].filter(Boolean);
   return [
     `## Advisory findings (${counts.join(", ")}) — how to treat them`,
-    "- Commit these bits as they stand. Do not edit them first to answer a finding: any change voids the clearance and the full panel runs again.",
+    "- Commit these bits as they stand, all of it, in one commit. Do not edit them first to answer a finding: any change voids the clearance and the full panel runs again. Do not split them across commits: each split re-opens review for the remainder.",
     "- Do not start a follow-up change whose only purpose is answering these. It is reviewed too and draws fresh findings, so the loop never ends.",
     "- If one is worth fixing, fold it into work you were already going to do next, or write it down where the plan of work lives.",
     "- Then move on to the next planned work.",

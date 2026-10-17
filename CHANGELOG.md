@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live panel readout**: while the panel runs, a widget above the editor shows each member — state (pending, waiting for a slot, running, retrying after a 429 with the countdown, verdict), latest tool calls, directional token usage, elapsed time, and cost. TUI only; RPC/JSON modes keep the footer status, and the tool row shows a collapsed one-line-per-member view. All entry paths (tool, `/review`, the commit hook) get it.
 - **Rate-limit retries with backoff**: a panel member that fails on a provider 429 retries up to three times (5s → 15s → 45s with jitter, or the provider's `Retry-After` when it names one), releasing its concurrency slot while waiting and restarting from its warm seed. Each retry is recorded in the report's warnings; anything else still fails after the panel's one re-run.
 - **`model` in `review-gate.json`**: the `provider/id` that panel members without their own `model:` run on, in place of the session's model. Resolution is strict — an exact registry entry, or a custom id on a known provider sent to the provider verbatim; a fuzzy match fails before the panel runs, and each member's reported model is checked against the configured value when the panel runs.
 
 ### Changed
 
+- A PROCEED now tells the model to commit the whole reviewed tree in one commit: splitting it moves the changeset hash and sends the remainder back through the panel.
 - Every key in `review-gate.json` is optional; `{}` now means all defaults instead of failing the load.
 - Cleared reports carry explicit handling for LOW and overturned findings: commit the bits as they stand, fold fixes into planned work rather than a follow-up review bait loop, and move on.
 

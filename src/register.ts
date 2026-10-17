@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type Component, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   committedDrift,
@@ -21,10 +21,22 @@ import {
 import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.ts";
 import { type ReviewDeps, type ReviewOutcome, type ReviewRequest, runReview } from "./gate.ts";
 import { assertExactPanelModel } from "./panel-model.ts";
+import { type LineRole, type PanelProgress, type ProgressLine, renderProgress } from "./progress.ts";
 import { CHILD_ENV } from "./runner.ts";
 import { describeError } from "./util.ts";
 
 const STATUS_KEY = "adversarial-review";
+const WIDGET_KEY = "adversarial-review";
+/** LineRole → theme foreground token. */
+const ROLE_COLOR: Record<LineRole, Parameters<ExtensionContext["ui"]["theme"]["fg"]>[0]> = {
+  header: "toolTitle",
+  active: "accent",
+  ok: "success",
+  error: "error",
+  warning: "warning",
+  muted: "dim",
+  detail: "muted",
+};
 const MAX_INTENT_CHARS = 1200;
 /**
  * Live clearances are removed when their tool result lands, so this only bounds
@@ -128,7 +140,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     if (prompt !== "") remember(intents, ctx.sessionManager.getSessionId(), prompt, MAX_TRACKED_SESSIONS);
   });
 
-  pi.registerTool<typeof ReviewParams, ReviewOutcome>({
+  pi.registerTool<typeof ReviewParams, ReviewOutcome | PanelProgress>({
     name: "adversarial_review",
     label: "Adversarial review",
     description: [
@@ -146,8 +158,8 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     parameters: ReviewParams,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const outcome = await withStatus(ctx, () =>
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const outcome = await withStatus(ctx, (onProgress) =>
         runGate(ctx, {
           cwd: ctx.cwd,
           host: ctx,
@@ -155,6 +167,13 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
           context: params.context?.trim() ?? "",
           trigger: "manual",
           signal,
+          onProgress: (snapshot) => {
+            onProgress(snapshot);
+            onUpdate?.({
+              content: [{ type: "text", text: "adversarial review running — live status above the editor" }],
+              details: snapshot,
+            });
+          },
         }),
       );
       return {
@@ -173,10 +192,21 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     },
 
     renderResult(result, _options, theme) {
-      const outcome = result.details;
+      const details = result.details;
       const text = result.content.find((part) => part.type === "text");
       const body = text?.type === "text" ? text.text : "(no output)";
-      if (outcome === undefined) return new Text(body, 0, 0);
+      if (details === undefined) return new Text(body, 0, 0);
+      // A mid-run partial: collapsed live status, one line per member.
+      if ("phase" in details) {
+        return new Text(
+          renderProgress(details, Date.now(), true)
+            .map((line) => theme.fg(ROLE_COLOR[line.role], line.text))
+            .join("\n"),
+          0,
+          0,
+        );
+      }
+      const outcome = details;
 
       const passed = outcome.cleared;
       const ran = outcome.reviewers.filter((r) => r.ran).length;
@@ -211,7 +241,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     description: "Run the adversarial review panel on the current changeset",
     handler: async (_args, ctx) => {
       try {
-        const outcome = await withStatus(ctx, () =>
+        const outcome = await withStatus(ctx, (onProgress) =>
           runGate(ctx, {
             cwd: ctx.cwd,
             host: ctx,
@@ -219,6 +249,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
             context: "",
             trigger: "manual",
             signal: ctx.signal,
+            onProgress,
           }),
         );
         ctx.ui.notify(
@@ -282,7 +313,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
 
     let outcome: ReviewOutcome;
     try {
-      outcome = await withStatus(ctx, () =>
+      outcome = await withStatus(ctx, (onProgress) =>
         runGate(ctx, {
           cwd: ctx.cwd,
           host: ctx,
@@ -290,6 +321,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
           context: "",
           trigger: "commit",
           signal: ctx.signal,
+          onProgress,
         }),
       );
     } catch (error) {
@@ -438,12 +470,74 @@ function skipReport(reason: string): string {
   ].join("\n");
 }
 
-async function withStatus<T>(ctx: ExtensionContext, fn: () => Promise<T>): Promise<T> {
-  ctx.ui.setStatus(STATUS_KEY, "adversarial review running");
+/**
+ * The live panel readout. In a TUI, a widget above the editor renders every
+ * progress snapshot — no keyboard focus, so the user can keep working — and
+ * ticks elapsed time locally. Elsewhere (RPC/JSON modes) it is a no-op and
+ * the footer status carries the run state. Either way, `fn` receives the
+ * progress sink it must feed: a widget that renders nothing is worse than
+ * none, because it looks like a hung review.
+ */
+function progressUI(ctx: ExtensionContext): { onProgress: (snapshot: PanelProgress) => void; dispose: () => void } {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return { onProgress: () => {}, dispose: () => {} };
+  let snapshot: PanelProgress | undefined;
+  let tui: TUI | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let colorize: (line: ProgressLine) => string = (line) => line.text;
+  const component: Component & { dispose(): void } = {
+    render: (width: number): string[] => {
+      if (snapshot === undefined) return [];
+      // Lines are trimmed to the terminal width here, after coloring: the
+      // activity lines are truncated by character count upstream, before
+      // icons and prefixes are added, and pi-tui throws on an over-wide line
+      // rather than clipping it.
+      return renderProgress(snapshot, Date.now(), false)
+        .map(colorize)
+        .map((line) => truncateToWidth(line, width));
+    },
+    invalidate: () => {},
+    dispose: () => {
+      if (timer !== undefined) clearInterval(timer);
+    },
+  };
+  ctx.ui.setWidget(WIDGET_KEY, (t, theme) => {
+    tui = t;
+    colorize = (line) => theme.fg(ROLE_COLOR[line.role], line.text);
+    timer = setInterval(() => t.requestRender(), 1000);
+    timer.unref();
+    return component;
+  });
+  return {
+    onProgress: (next) => {
+      snapshot = next;
+      tui?.requestRender();
+    },
+    dispose: () => {
+      component.dispose();
+      ctx.ui.setWidget(WIDGET_KEY, undefined);
+    },
+  };
+}
+
+async function withStatus<T>(
+  ctx: ExtensionContext,
+  fn: (onProgress: (snapshot: PanelProgress) => void) => Promise<T>,
+): Promise<T> {
+  // The widget supersedes the footer line in a TUI; elsewhere the footer is
+  // all the live state there is.
+  if (ctx.mode !== "tui" || !ctx.hasUI) {
+    ctx.ui.setStatus(STATUS_KEY, "adversarial review running");
+    try {
+      return await fn(() => {});
+    } finally {
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+    }
+  }
+  const ui = progressUI(ctx);
   try {
-    return await fn();
+    return await fn(ui.onProgress);
   } finally {
-    ctx.ui.setStatus(STATUS_KEY, undefined);
+    ui.dispose();
   }
 }
 

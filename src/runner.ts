@@ -80,6 +80,8 @@ export interface SingleResult {
 }
 
 export type OnUpdateCallback<T> = (partial: AgentToolResult<T>) => void;
+/** What a panel member's partial updates look like: the runner wraps one SingleResult. */
+export type MemberUpdate = OnUpdateCallback<{ results: SingleResult[] }>;
 export interface Dispatch {
   thinkingLevel?: ThinkingLevel | undefined;
   gate: Semaphore;
