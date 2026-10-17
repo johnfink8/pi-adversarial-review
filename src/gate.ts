@@ -52,6 +52,8 @@ import { keepWarm, loadWarm, pruneWarm, type WarmStart } from "./warm.ts";
 
 export interface ReviewDeps {
   gate: Semaphore;
+  /** `provider/id` for panel members without their own `model:`; unset means the session's model. */
+  model?: string | undefined;
 }
 
 export interface ReviewRequest {
@@ -164,10 +166,30 @@ interface PanelMember {
   hash: string;
 }
 
-function buildModerator(panel: PanelMember[]): PanelMember {
+/**
+ * Confirms a member dispatched on the configured panel model actually ran on it.
+ * The child reports the `provider/id` of every assistant message it produces;
+ * a mismatch means pi resolved `--model` to something other than the canonical
+ * value the gate checked for, and the run cannot count as reviewed on it.
+ */
+export function verifyPanelModel(
+  configured: string,
+  result: Pick<SingleResult, "model" | "reportedModel">,
+): string | undefined {
+  if (result.model !== configured) return undefined;
+  if (result.reportedModel === undefined) {
+    return `dispatched on model ${configured} but no assistant message reports a model, so the configured model could not be confirmed`;
+  }
+  if (result.reportedModel !== configured) {
+    return `dispatched on model ${configured} but reports it ran on ${result.reportedModel}`;
+  }
+  return undefined;
+}
+
+function buildModerator(panel: PanelMember[], panelModel: string | undefined): PanelMember {
   const found = discoverModerator();
   const prompt = `${found.systemPrompt.trimEnd()}\n${moderationProtocol()}`;
-  const spec = JSON.stringify([found.name, found.tools ?? [], found.model ?? "", prompt]);
+  const spec = JSON.stringify([found.name, found.tools ?? [], found.model ?? panelModel ?? "", prompt]);
   // Its report is written beside the panel's, under the same sanitised naming.
   if (panel.some((member) => safeName(member.agent.name) === safeName(found.name))) {
     throw new Error(`The moderator "${found.name}" shares a report name with a reviewer; rename one of them.`);
@@ -198,7 +220,7 @@ export function requireProjectContext(repoRoot: string): void {
   );
 }
 
-function buildPanel(): { panel: PanelMember[]; discovery: AgentDiscoveryResult } {
+function buildPanel(panelModel: string | undefined): { panel: PanelMember[]; discovery: AgentDiscoveryResult } {
   const found = discoverReviewers();
   const panel = found.reviewers.map((reviewer) => {
     // Each reviewer is told who else is on the panel, from their own spec
@@ -209,8 +231,9 @@ function buildPanel(): { panel: PanelMember[]; discovery: AgentDiscoveryResult }
     const prompt = `${reviewer.systemPrompt.trimEnd()}\n${approvalProtocol(others)}`;
     // The whole spec, not just the body: frontmatter decides what a reviewer may
     // inspect, so editing `tools:` or `model:` has to invalidate the verdicts it
-    // earned under the old capability set.
-    const spec = JSON.stringify([reviewer.name, reviewer.tools ?? [], reviewer.model ?? "", prompt]);
+    // earned under the old capability set. The configured panel model counts
+    // too, for a reviewer that runs on it.
+    const spec = JSON.stringify([reviewer.name, reviewer.tools ?? [], reviewer.model ?? panelModel ?? "", prompt]);
     return { agent: { ...reviewer, systemPrompt: prompt }, hash: specHash(spec) };
   });
 
@@ -358,8 +381,8 @@ export async function runReview(deps: ReviewDeps, request: ReviewRequest): Promi
     );
   }
 
-  const { panel, discovery } = buildPanel();
-  const moderator = buildModerator(panel);
+  const { panel, discovery } = buildPanel(deps.model);
+  const moderator = buildModerator(panel, deps.model);
   const warnings: string[] = [];
   const changeset = await captureChangeset(request.cwd);
   const reportsDir = path.dirname(changeset.patchPath);
@@ -435,7 +458,7 @@ async function runPanel(
   warnings: string[],
 ): Promise<ReviewOutcome> {
   const { panel, moderator, discovery, changeset, recordPath, reportsDir } = run;
-  const dispatch: Dispatch = buildDispatch(request.host, deps.gate);
+  const dispatch: Dispatch = buildDispatch(request.host, deps.gate, deps.model);
 
   const loaded = await loadRecord(changeset.repoRoot, changeset.hash);
   if (loaded.warning !== undefined) warnings.push(loaded.warning);
@@ -527,6 +550,13 @@ async function runPanel(
           );
           continue;
         }
+        if (deps.model !== undefined) {
+          const modelFailure = verifyPanelModel(deps.model, result);
+          if (modelFailure !== undefined) {
+            states.set(name, incomplete(modelFailure));
+            continue;
+          }
+        }
 
         // A reviewer that ran nothing cannot have read the patch. This is the hard
         // floor only: whether it opened the patch itself is reported, not
@@ -612,7 +642,7 @@ async function runPanel(
           reportPath: standing.reportPath,
         };
   if (panelVerdict === "BLOCK" && standing === undefined && request.signal?.aborted !== true) {
-    const moderated = await moderate(changeset, request, dispatch, moderator, panel, states, warnings);
+    const moderated = await moderate(changeset, request, dispatch, moderator, panel, states, warnings, deps.model);
     ruling = moderated.ruling;
     moderation = moderated.summary;
   }
@@ -700,6 +730,7 @@ async function moderate(
   panel: PanelMember[],
   states: Map<string, AgentState>,
   warnings: string[],
+  panelModel: string | undefined,
 ): Promise<{ ruling: Moderation | undefined; summary: ModerationSummary }> {
   const name = moderator.agent.name;
   const discovery: AgentDiscoveryResult = { agents: [moderator.agent], skipped: [] };
@@ -741,6 +772,13 @@ async function moderate(
       if (isFailedResult(result)) {
         failure = result.errorMessage || result.stderr.trim() || `moderator process exited ${result.exitCode}`;
         continue;
+      }
+      if (panelModel !== undefined) {
+        const modelFailure = verifyPanelModel(panelModel, result);
+        if (modelFailure !== undefined) {
+          failure = modelFailure;
+          continue;
+        }
       }
       // A ruling that opened nothing judged the summaries, not the code.
       const usedTools = result.messages.some(
@@ -861,7 +899,7 @@ function headline(outcome: ReviewOutcome): string {
 
 function closingInstruction(outcome: ReviewOutcome): string {
   if (outcome.verdict === "PROCEED") {
-    return "Verdict PROCEED — no reviewer has a blocking finding on these exact bits. Committing is cleared; any change to the tree invalidates it. Advisory findings are yours to weigh.";
+    return "Verdict PROCEED — no reviewer has a blocking finding on these exact bits. Committing is cleared; any change to the tree invalidates it.";
   }
   if (outcome.verdict === "INCOMPLETE") {
     return "Verdict INCOMPLETE — the panel did not complete, so this is not a pass. Treat it as unreviewed and retry.";
@@ -870,13 +908,34 @@ function closingInstruction(outcome: ReviewOutcome): string {
     return (
       "The panel blocked these exact bits and the moderator overturned the block. They are cleared: commit them now, " +
       "without further edits — any change to the tree voids the ruling and the full panel runs again. " +
-      "Carry the moderator's prose and the reviewers' findings forward into the work that follows."
+      "Carry the moderator's notes into the work that follows."
     );
   }
   return (
     "Verdict BLOCK — fix what must be fixed (the moderator's ruling, when present, says which) and run again; " +
     "the full panel reviews the new bits. Only the user can waive the gate (/review-skip <reason>)."
   );
+}
+
+/**
+ * How to treat findings that no longer block once the bits are cleared to commit: LOWs, and on an
+ * overturned BLOCK the findings the moderator overruled. Shared by PROCEED and an overturn. A
+ * follow-up change made only to answer them is reviewed in turn and draws fresh findings of its
+ * own, so acting on them per commit is a loop that never converges.
+ */
+export function advisoryGuidance(outcome: Pick<ReviewOutcome, "cleared" | "verdict" | "findings">): string | undefined {
+  if (!outcome.cleared) return undefined;
+  const lows = outcome.findings.filter((f) => !isBlocking(f)).length;
+  const overturned = outcome.verdict === "BLOCK" ? outcome.findings.filter(isBlocking).length : 0;
+  if (lows + overturned === 0) return undefined;
+  const counts = [lows > 0 ? `${lows} LOW` : "", overturned > 0 ? `${overturned} overturned` : ""].filter(Boolean);
+  return [
+    `## Advisory findings (${counts.join(", ")}) — how to treat them`,
+    "- Commit these bits as they stand. Do not edit them first to answer a finding: any change voids the clearance and the full panel runs again.",
+    "- Do not start a follow-up change whose only purpose is answering these. It is reviewed too and draws fresh findings, so the loop never ends.",
+    "- If one is worth fixing, fold it into work you were already going to do next, or write it down where the plan of work lives.",
+    "- Then move on to the next planned work.",
+  ].join("\n");
 }
 
 function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: ReviewRequest): string {
@@ -939,6 +998,8 @@ function renderReport(outcome: ReviewOutcome, changeset: Changeset, request: Rev
   }
 
   sections.push(closingInstruction(outcome));
+  const guidance = advisoryGuidance(outcome);
+  if (guidance !== undefined) sections.push(guidance);
 
   const index = [
     ...outcome.reviewers.map(

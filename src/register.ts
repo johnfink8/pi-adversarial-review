@@ -19,7 +19,8 @@ import {
   type TreeSnapshot,
 } from "./changeset.ts";
 import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.ts";
-import { type ReviewDeps, type ReviewOutcome, runReview } from "./gate.ts";
+import { type ReviewDeps, type ReviewOutcome, type ReviewRequest, runReview } from "./gate.ts";
+import { assertExactPanelModel } from "./panel-model.ts";
 import { CHILD_ENV } from "./runner.ts";
 import { describeError } from "./util.ts";
 
@@ -102,6 +103,20 @@ const ReviewParams = Type.Object({
 });
 
 export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
+  /**
+   * The configured panel model is checked here, where the session's model
+   * registry is in scope, and not inside the gate: resolution is against the
+   * same catalogue the child's `--model` flag sees, and a bad value stops the
+   * panel before it spends a token. The gate runs on the canonical `provider/id`
+   * the check returns, so dispatch, verdict hashing, and the child's own report
+   * of the model it ran on all name the same model.
+   */
+  const runGate = (ctx: ExtensionContext, request: ReviewRequest): Promise<ReviewOutcome> => {
+    if (deps.model === undefined) return runReview(deps, request);
+    const model = assertExactPanelModel(deps.model, ctx.modelRegistry.getAll());
+    return runReview({ ...deps, model }, request);
+  };
+
   pi.on("before_agent_start", (event, ctx) => {
     if (process.env[CHILD_ENV] !== "1") {
       event.systemPromptOptions.sections.adversarial_review = SYSTEM_SECTION;
@@ -133,7 +148,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const outcome = await withStatus(ctx, () =>
-        runReview(deps, {
+        runGate(ctx, {
           cwd: ctx.cwd,
           host: ctx,
           intent: intentFor(ctx.sessionManager.getSessionId()),
@@ -197,7 +212,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     handler: async (_args, ctx) => {
       try {
         const outcome = await withStatus(ctx, () =>
-          runReview(deps, {
+          runGate(ctx, {
             cwd: ctx.cwd,
             host: ctx,
             intent: intentFor(ctx.sessionManager.getSessionId()),
@@ -268,7 +283,7 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
     let outcome: ReviewOutcome;
     try {
       outcome = await withStatus(ctx, () =>
-        runReview(deps, {
+        runGate(ctx, {
           cwd: ctx.cwd,
           host: ctx,
           intent: intentFor(session),

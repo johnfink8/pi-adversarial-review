@@ -27,7 +27,7 @@ Five reviewers ship in `reviewers/`. Each owns one lane and is told what its nei
 
 To use your own panel, put specs in `<agentDir>/review-gate/reviewers/` (and optionally `<agentDir>/review-gate/moderator/`). A directory there **replaces** the bundled one; it does not merge with it. A spec is Markdown with `name`, `description`, optional `tools` and optional `model` frontmatter, and the system prompt as the body. The gate appends the approval protocol (`src/protocol.ts`) that makes each reviewer's output machine-readable.
 
-A panel member without `model:` runs on the session's model at the session's thinking level.
+A panel member without `model:` runs on the session's model at the session's thinking level, unless `review-gate.json` sets a `model` (see Configuration).
 
 ## Requirements
 
@@ -45,10 +45,18 @@ pi install npm:pi-adversarial-review
 `<agentDir>/review-gate.json`, optional:
 
 ```json
-{ "maxConcurrency": 1 }
+{ "maxConcurrency": 1, "model": "<provider>/<model-id>" }
 ```
 
-How many panel members run at once, from 1 to 8. The default is 4. Use 1 for a local endpoint that caches one conversation at a time: concurrent reviewers evict each other's prefix cache, so every one pays a full prefill. The file is read when the extension loads, and an invalid value fails the load rather than falling back to the default.
+Every key is optional.
+
+`maxConcurrency` is how many panel members run at once, from 1 to 8. The default is 4. Use 1 for a local endpoint that caches one conversation at a time: concurrent reviewers evict each other's prefix cache, so every one pays a full prefill.
+
+`model` is the `provider/id` (as `pi --list-models` shows it) that panel members without their own `model:` run on, instead of the session's model. It applies to the moderator too. The session's thinking level is not passed along, since it was set for a different model, and a trailing `:<thinking>` suffix is rejected rather than quietly pinning one — other colons are ordinary id characters, as in `openrouter/google/gemma-4-26b-a4b-it:free`. Changing it invalidates those members' earlier verdicts, the same as editing their specs.
+
+Resolution is strict, and checked against the session's model registry before the panel runs, in the same order pi's own `--model` resolution follows. An exact `provider/id` entry passes (case-insensitively, resolved to the registry's casing); so does a custom id on a known provider, sent to the provider verbatim — how you reach a model pi's registry has not caught up to. Anything pi would reach by fuzzy match runs a different model than you named and fails instead, with the exact id to configure in the error. The canonical `provider/id` the check returns is what gets dispatched, hashed into verdicts, and compared against each member's own report of the model it ran on when the panel runs, so a registry that drifted between the check and the dispatch fails the run rather than reviewing on the wrong model.
+
+The file is read when the extension loads, and an invalid value fails the load rather than falling back to the default.
 
 If `PI_BASH_MAX_TIMEOUT` is set, the gate never raises a cleared commit's bash timeout above it.
 

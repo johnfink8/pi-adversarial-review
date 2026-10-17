@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`model` in `review-gate.json`**: the `provider/id` that panel members without their own `model:` run on, in place of the session's model. Resolution is strict — an exact registry entry, or a custom id on a known provider sent to the provider verbatim; a fuzzy match fails before the panel runs, and each member's reported model is checked against the configured value when the panel runs.
+
+### Changed
+
+- Every key in `review-gate.json` is optional; `{}` now means all defaults instead of failing the load.
+- Cleared reports carry explicit handling for LOW and overturned findings: commit the bits as they stand, fold fixes into planned work rather than a follow-up review bait loop, and move on.
+
+[Unreleased]: https://github.com/johnfink8/pi-adversarial-review/compare/v0.1.0...HEAD
+
 ## [0.1.0] - 2026-10-13
 
 First public release.

@@ -55,6 +55,14 @@ export interface SingleResult {
   droppedEvents: number;
   model?: string | undefined;
   /**
+   * The `provider/id` the child reports it ran on, taken from its assistant
+   * messages. Kept apart from `model` — the requested string — because pi
+   * resolves `--model` with exact-or-fuzzy matching, so a near-miss id runs a
+   * different model silently; comparing this against the request is what
+   * surfaces the substitution.
+   */
+  reportedModel?: string | undefined;
+  /**
    * The child's session on disk, when the caller asked to keep it
    * (`SingleAgentRequest.session`). The caller owns it from here and must remove it.
    */
@@ -201,12 +209,17 @@ function isPiCliEntry(script: string): boolean {
 }
 
 export interface DispatchHost {
-  model: ExtensionContext["model"];
+  /** Narrowed to what buildDispatch reads; the full `Model` shape stays at the extension boundary. */
+  model: { provider: string; id: string } | undefined;
   thinkingLevel?: ExtensionContext["thinkingLevel"];
 }
 
-/** What a dispatching session hands its subagents: its model, its thinking level, and the shared gate. */
-export function buildDispatch(host: DispatchHost, gate: Semaphore): Dispatch {
+/**
+ * What a dispatching session hands its subagents: its model, its thinking level, and the shared gate.
+ * A panel model runs without the session's thinking level, which was chosen for a different model.
+ */
+export function buildDispatch(host: DispatchHost, gate: Semaphore, panelModel?: string): Dispatch {
+  if (panelModel !== undefined) return { thinkingLevel: undefined, gate, model: panelModel };
   return {
     thinkingLevel: host.thinkingLevel,
     gate,
@@ -476,6 +489,9 @@ async function runProcess(
             currentResult.usage.contextTokens = msg.usage.totalTokens;
           } else {
             dropEvent(`Assistant message without usage: ${line}`);
+          }
+          if (typeof msg.provider === "string" && typeof msg.model === "string") {
+            currentResult.reportedModel = `${msg.provider}/${msg.model}`;
           }
           if (!currentResult.model && msg.model) currentResult.model = msg.model;
           if (msg.stopReason) currentResult.stopReason = msg.stopReason;

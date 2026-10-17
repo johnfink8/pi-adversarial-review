@@ -4,5 +4,6 @@ import { registerReview } from "./register.ts";
 import { Semaphore } from "./semaphore.ts";
 
 export default function reviewGate(pi: ExtensionAPI): void {
-  registerReview(pi, { gate: new Semaphore(loadConfig().maxConcurrency) });
+  const config = loadConfig();
+  registerReview(pi, { gate: new Semaphore(config.maxConcurrency), model: config.model });
 }
