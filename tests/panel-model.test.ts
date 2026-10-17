@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { verifyPanelModel } from "../src/gate.ts";
 import { assertExactPanelModel, type PanelModelCandidate, PanelModelOverrides } from "../src/panel-model.ts";
+import { buildModelOptions, CLEAR_MODEL_VALUE, toReviewModelChoice } from "../src/review-model-picker.ts";
 
 const candidate = (provider: string, id: string, name?: string): PanelModelCandidate => ({
   provider,
@@ -161,5 +162,31 @@ describe("PanelModelOverrides", () => {
     store.set("s1", "prov/one-b");
     store.set("s4", "prov/four");
     expect(store.resolve("s1", undefined)).toBe("prov/one-b");
+  });
+});
+
+describe("review-model picker mapping", () => {
+  it("maps the clear entry to a clear choice", () => {
+    expect(toReviewModelChoice(CLEAR_MODEL_VALUE)).toEqual({ kind: "clear" });
+  });
+
+  it("maps a registry pick to its provider/id", () => {
+    expect(toReviewModelChoice("openrouter/deepseek/deepseek-v4.1-flash-1017")).toEqual({
+      kind: "model",
+      value: "openrouter/deepseek/deepseek-v4.1-flash-1017",
+    });
+  });
+
+  it("builds canonical options and omits names that repeat the id", () => {
+    const options = buildModelOptions([
+      { provider: "openrouter", id: "deepseek/deepseek-v4.1-flash-1017" },
+      { provider: "hyperqwen", id: "qwen3.8", name: "qwen3.8" },
+      { provider: "hyperqwen", id: "qwen3.8-pro", name: "Qwen Pro" },
+    ]);
+    expect(options).toEqual([
+      { value: "openrouter/deepseek/deepseek-v4.1-flash-1017", label: "openrouter/deepseek/deepseek-v4.1-flash-1017" },
+      { value: "hyperqwen/qwen3.8", label: "hyperqwen/qwen3.8" },
+      { value: "hyperqwen/qwen3.8-pro", label: "hyperqwen/qwen3.8-pro", description: "Qwen Pro" },
+    ]);
   });
 });

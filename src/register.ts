@@ -22,13 +22,19 @@ import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.t
 import { type ReviewDeps, type ReviewOutcome, type ReviewRequest, runReview } from "./gate.ts";
 import { assertExactPanelModel, PanelModelOverrides } from "./panel-model.ts";
 import { type LineRole, type PanelProgress, type ProgressLine, renderProgress } from "./progress.ts";
+import {
+  buildModelOptions,
+  CLEAR_MODEL_VALUE,
+  type ReviewModelChoice,
+  type ReviewModelOption,
+  ReviewModelSelector,
+  toReviewModelChoice,
+} from "./review-model-picker.ts";
 import { CHILD_ENV } from "./runner.ts";
 import { describeError } from "./util.ts";
 
 const STATUS_KEY = "adversarial-review";
 const WIDGET_KEY = "adversarial-review";
-/** The selector entry that clears a session override, back to the config default. */
-const DEFAULT_MODEL_CHOICE = "— config default —";
 /** LineRole → theme foreground token. */
 const ROLE_COLOR: Record<LineRole, Parameters<ExtensionContext["ui"]["theme"]["fg"]>[0]> = {
   header: "toolTitle",
@@ -294,15 +300,33 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
       }
       if (arg === "") {
         const current = panelModels.resolve(session, deps.model);
-        const options = [DEFAULT_MODEL_CHOICE, ...ctx.modelRegistry.getAll().map((m) => `${m.provider}/${m.id}`)];
-        const choice = await ctx.ui.select(`Panel model for this session (now: ${current ?? fallback})`, options);
+        const clearOption: ReviewModelOption = { value: CLEAR_MODEL_VALUE, label: "clear — run the fallback" };
+        const choose = async (): Promise<ReviewModelChoice | undefined> => {
+          // Non-TUI contexts have no overlay: a flat picker over the same values.
+          if (ctx.mode !== "tui") {
+            const picked = await ctx.ui.select(`Panel model for this session (now: ${current ?? fallback})`, [
+              CLEAR_MODEL_VALUE,
+              ...buildModelOptions(ctx.modelRegistry.getAll()).map((o) => o.value),
+            ]);
+            return picked === undefined ? undefined : toReviewModelChoice(picked);
+          }
+          return ctx.ui.custom<ReviewModelChoice | undefined>((_tui, _theme, _keybindings, done) => {
+            return new ReviewModelSelector(
+              current,
+              [clearOption, ...buildModelOptions(ctx.modelRegistry.getAll())],
+              (value) => done(toReviewModelChoice(value)),
+              () => done(undefined),
+            );
+          });
+        };
+        const choice = await choose();
         if (choice === undefined) return;
-        if (choice === DEFAULT_MODEL_CHOICE) {
+        if (choice.kind === "clear") {
           panelModels.clear(session);
           ctx.ui.notify(`Panel model for this session: ${fallback}`, "info");
           return;
         }
-        setPanelModel(ctx, session, choice);
+        setPanelModel(ctx, session, choice.value);
         return;
       }
       setPanelModel(ctx, session, arg);
