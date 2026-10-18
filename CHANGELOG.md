@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-10-18
 
 ### Added
 
@@ -19,8 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A PROCEED now tells the model to commit the whole reviewed tree in one commit: splitting it moves the changeset hash and sends the remainder back through the panel.
 - Every key in `review-gate.json` is optional; `{}` now means all defaults instead of failing the load.
 - Cleared reports carry explicit handling for LOW and overturned findings: commit the bits as they stand, fold fixes into planned work rather than a follow-up review bait loop, and move on.
+- **Reviewer instructions name the verification the panel must not re-run**: the project's tests, typecheck, linter, and formatter are the author's and CI's job — a reviewer that re-runs them burns turns re-deriving a deterministic result, and the specs now say so in every reviewer's hard rules and in every task prompt, so user-defined reviewers get it too. Read-only inspection and ad-hoc probes stay allowed.
 
-[Unreleased]: https://github.com/johnfink8/pi-adversarial-review/compare/v0.1.0...HEAD
+### Fixed
+
+- **`/review-model` no longer offers models from providers without credentials.** The picker listed the full registry (`getAll`), so a provider pi knows but isn't logged into was a choosable entry that died a panel round later with "No API key" — five reviewers, twice each. The picker now lists `getAvailable()` (credential-filtered, like `/model`), and a set-time check refuses a logged-out provider with the `/login` guidance; `runGate` re-checks before children spawn, so credential drift between pick and run fails once and loudly instead of ten times quietly. The stored override is the canonical `provider/id`, so a logged-in provider typed as `OpenAI/...` passes the case-sensitive credential lookup.
+
+[0.1.1]: https://github.com/johnfink8/pi-adversarial-review/compare/v0.1.0...v0.1.1
 
 ## [0.1.0] - 2026-10-13
 
