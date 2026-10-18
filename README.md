@@ -103,12 +103,6 @@ pi --no-extensions -e ./src/index.ts   # try it in a repository with an AGENTS.m
 
 The tests use temporary git repositories and a temporary pi agent directory. They never call a model.
 
-## Releasing
-
-1. Bump `version` in `package.json` and add a matching `## [x.y.z]` entry to `CHANGELOG.md`.
-2. Merge to `main`.
-3. Publish a GitHub release tagged `vx.y.z`. The `publish` workflow checks the tag against `package.json` and the CHANGELOG, runs the checks, and runs `npm stage publish`, which stages the version without 2FA — approve it on npmjs (package page → **Staged Packages**) with 2FA, or with `npm stage approve <stage-id> --otp <code>` locally, to make it live. Staging never publishes live from CI; the approval is the proof-of-presence step.
-
 ## License
 
 MIT. `src/runner.ts` is adapted from pi's MIT-licensed subagent example; see `LICENSE`.
