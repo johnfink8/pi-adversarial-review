@@ -107,7 +107,7 @@ The tests use temporary git repositories and a temporary pi agent directory. The
 
 1. Bump `version` in `package.json` and add a matching `## [x.y.z]` entry to `CHANGELOG.md`.
 2. Merge to `main`.
-3. Publish a GitHub release tagged `vx.y.z`. The `publish` workflow checks the tag against `package.json` and the CHANGELOG, runs the checks, and publishes to npm with provenance.
+3. Publish a GitHub release tagged `vx.y.z`. The `publish` workflow checks the tag against `package.json` and the CHANGELOG, runs the checks, and runs `npm stage publish`, which stages the version without 2FA — approve it on npmjs (package page → **Staged Packages**) with 2FA, or with `npm stage approve <stage-id> --otp <code>` locally, to make it live. Staging never publishes live from CI; the approval is the proof-of-presence step.
 
 ## License
 

@@ -57,4 +57,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - run: npm install
-      - run: npm publish --provenance --access public
+      # The release flow is stage-publish, not direct publish: npm recommends
+      # against granting bypass-2FA publish to tokens and is restricting
+      # direct publishing for them. npm stage publish defers 2FA to approval
+      # and never publishes live from CI — the registry enforces that, so
+      # there is nothing to verify afterwards; a maintainer approves on npmjs
+      # (package page → Staged Packages) or npm stage approve with 2FA.
+      # Provenance still signs (id-token: write) — registry auth and
+      # attestation are separate. Staged publishing needs npm >= 11.15.0,
+      # which the runner's bundled npm may predate.
+      - name: Stage publish (approve on npmjs with 2FA to make it live)
+        run: |
+          npm install -g npm@latest
+          npm stage publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
