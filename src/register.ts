@@ -20,7 +20,7 @@ import {
 } from "./changeset.ts";
 import { type CommitEscape, commitEscapes, looksLikeGitCommit } from "./commit.ts";
 import { type ReviewDeps, type ReviewOutcome, type ReviewRequest, runReview } from "./gate.ts";
-import { assertExactPanelModel, PanelModelOverrides } from "./panel-model.ts";
+import { assertRunnablePanelModel, PanelModelOverrides } from "./panel-model.ts";
 import { type LineRole, type PanelProgress, type ProgressLine, renderProgress } from "./progress.ts";
 import {
   buildModelOptions,
@@ -136,7 +136,12 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
   const runGate = (ctx: ExtensionContext, request: ReviewRequest): Promise<ReviewOutcome> => {
     const configured = panelModels.resolve(ctx.sessionManager.getSessionId(), deps.model);
     if (configured === undefined) return runReview(deps, request);
-    const model = assertExactPanelModel(configured, ctx.modelRegistry.getAll());
+    // The credential re-check is here, not only at set time, because auth can
+    // drift after the pick (a logout, a new instance): without it five
+    // reviewers each die twice on "No API key" instead of one loud refusal.
+    const model = assertRunnablePanelModel(configured, ctx.modelRegistry.getAll(), (provider) =>
+      ctx.modelRegistry.getProviderAuthStatus(provider),
+    );
     return runReview(
       {
         ...deps,
@@ -306,14 +311,17 @@ export function registerReview(pi: ExtensionAPI, deps: ReviewDeps): void {
           if (ctx.mode !== "tui") {
             const picked = await ctx.ui.select(`Panel model for this session (now: ${current ?? fallback})`, [
               CLEAR_MODEL_VALUE,
-              ...buildModelOptions(ctx.modelRegistry.getAll()).map((o) => o.value),
+              // getAvailable, not getAll: the picker offers only providers
+              // with credentials, like /model — an unrunnable entry is a choice
+              // that dies a panel round later.
+              ...buildModelOptions(ctx.modelRegistry.getAvailable()).map((o) => o.value),
             ]);
             return picked === undefined ? undefined : toReviewModelChoice(picked);
           }
           return ctx.ui.custom<ReviewModelChoice | undefined>((_tui, _theme, _keybindings, done) => {
             return new ReviewModelSelector(
               current,
-              [clearOption, ...buildModelOptions(ctx.modelRegistry.getAll())],
+              [clearOption, ...buildModelOptions(ctx.modelRegistry.getAvailable())],
               (value) => done(toReviewModelChoice(value)),
               () => done(undefined),
             );
@@ -534,9 +542,10 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
 
 /**
  * Validate and store a session's panel model at the moment the user picks it —
- * the registry is in scope here, so a bad id fails at set time rather than
- * three minutes into a panel run. The runGate re-check still guards registry
- * drift between now and the run.
+ * the registry is in scope here, so a bad id or a logged-out provider fails
+ * at set time rather than three minutes into a panel run, and the canonical
+ * string is what gets stored and shown. The runGate re-check still guards
+ * registry and credential drift between now and the run.
  */
 function setPanelModel(ctx: ExtensionContext, session: string, model: string): void {
   if (!model.includes("/")) {
@@ -544,13 +553,14 @@ function setPanelModel(ctx: ExtensionContext, session: string, model: string): v
     return;
   }
   try {
-    assertExactPanelModel(model, ctx.modelRegistry.getAll());
+    const canonical = assertRunnablePanelModel(model, ctx.modelRegistry.getAll(), (provider) =>
+      ctx.modelRegistry.getProviderAuthStatus(provider),
+    );
+    panelModels.set(session, canonical);
+    ctx.ui.notify(`Panel model for this session: ${canonical} (resets on a new pi instance)`, "info");
   } catch (error) {
     ctx.ui.notify(describeError(error), "error");
-    return;
   }
-  panelModels.set(session, model);
-  ctx.ui.notify(`Panel model for this session: ${model} (resets on a new pi instance)`, "info");
 }
 
 function skipReport(reason: string): string {

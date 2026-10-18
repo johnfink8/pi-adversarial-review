@@ -274,6 +274,9 @@ function reviewerTask(changeset: Changeset, intent: string): string {
     // bytes nobody read, and nothing downstream notices.
     `The patch runs ${changeset.patchLines} line(s); a single read caps at 2000 lines, so expect at least ${Math.ceil(changeset.patchLines / 2000)} read(s) to cover it.`,
     `Scope: ${changeset.repoRoot}, ${changeset.files.length} file(s) differing from HEAD (${changeset.untracked.length} untracked), ${Math.max(1, Math.round(changeset.patchBytes / 1024))} KiB patch.`,
+    // Stated here, not only in the specs, so user-defined reviewers read it too;
+    // "read-only" alone let `pnpm test` through as a "read-only system query".
+    `The project's tests, typecheck, and formatting have already been run before this panel; do not run them. Read test and CI files as evidence; treat a coverage gap as a finding to write, not a suite to run.`,
     `Intent: ${intent}`,
     recordInstruction(),
   ].join("\n");

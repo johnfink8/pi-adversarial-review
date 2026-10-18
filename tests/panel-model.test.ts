@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { verifyPanelModel } from "../src/gate.ts";
-import { assertExactPanelModel, type PanelModelCandidate, PanelModelOverrides } from "../src/panel-model.ts";
+import {
+  assertExactPanelModel,
+  assertRunnablePanelModel,
+  type PanelModelCandidate,
+  PanelModelOverrides,
+  providerOf,
+} from "../src/panel-model.ts";
 import { buildModelOptions, CLEAR_MODEL_VALUE, toReviewModelChoice } from "../src/review-model-picker.ts";
 
 const candidate = (provider: string, id: string, name?: string): PanelModelCandidate => ({
@@ -162,6 +168,45 @@ describe("PanelModelOverrides", () => {
     store.set("s1", "prov/one-b");
     store.set("s4", "prov/four");
     expect(store.resolve("s1", undefined)).toBe("prov/one-b");
+  });
+});
+
+describe("assertRunnablePanelModel", () => {
+  const runnableRegistry = [candidate("openai", "gpt-5"), candidate("openrouter", "z-ai/glm-5.3-flash")];
+  // Case-sensitive like pi's real lookup: only the registry-cased provider passes.
+  const authStatus = (provider: string) => (provider === "openai" ? { configured: true } : { configured: false });
+
+  it("accepts a logged-in provider typed in non-canonical casing and returns the canonical id", () => {
+    expect(assertRunnablePanelModel("OpenAI/GPT-5", runnableRegistry, authStatus)).toBe("openai/gpt-5");
+  });
+
+  it("rejects a provider without credentials, naming the canonical model", () => {
+    expect(() => assertRunnablePanelModel("openrouter/z-ai/glm-5.3-flash", runnableRegistry, authStatus)).toThrowError(
+      /panel model "openrouter\/z-ai\/glm-5.3-flash": provider "openrouter" has no credentials/,
+    );
+  });
+
+  it("treats an absent status as no credentials rather than passing", () => {
+    expect(() => assertRunnablePanelModel("openai/gpt-5", runnableRegistry, () => undefined)).toThrowError(
+      /no credentials/,
+    );
+  });
+
+  it("still enforces the strict id rules before any credential lookup", () => {
+    expect(() => assertRunnablePanelModel("openai/gpt", runnableRegistry, () => ({ configured: true }))).toThrowError(
+      /fuzzy match would run/,
+    );
+  });
+});
+
+describe("providerOf", () => {
+  it("splits a provider/id at the first slash", () => {
+    expect(providerOf("z-ai/glm-5.3-flash")).toBe("z-ai");
+    expect(providerOf("openrouter/deepseek/deepseek-v4.1-flash-1017")).toBe("openrouter");
+  });
+
+  it("is undefined for a string with no slash", () => {
+    expect(providerOf("glm-5.3-flash")).toBeUndefined();
   });
 });
 

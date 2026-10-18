@@ -65,6 +65,38 @@ export function assertExactPanelModel(configured: string, models: readonly Panel
   return `${providerModels[0].provider}/${pattern}`;
 }
 
+/** The provider half of a `provider/id` string; undefined when there is no slash. */
+export function providerOf(model: string): string | undefined {
+  const slash = model.indexOf("/");
+  return slash === -1 ? undefined : model.slice(0, slash);
+}
+
+/**
+ * Canonicalize a panel model and require its provider to be logged in. The id
+ * check is case-insensitive while the provider lookup is not, so the
+ * credential check must read the canonical casing — checking the typed input
+ * rejects a logged-in provider entered as `OpenAI/...`.
+ *
+ * The auth lookup is injected so the decision stays testable. The picker's
+ * `getAvailable` list filters by the same status but is narrower — a provider
+ * with stored, runtime, or models.json credentials can pass here and still be
+ * absent from the picker — so this check is the authority on runnability,
+ * and the picker offers a subset of what it accepts.
+ */
+export function assertRunnablePanelModel(
+  model: string,
+  models: readonly PanelModelCandidate[],
+  authStatus: (provider: string) => { configured: boolean } | undefined,
+): string {
+  const canonical = assertExactPanelModel(model, models);
+  const provider = providerOf(canonical);
+  if (provider !== undefined && authStatus(provider)?.configured === true) return canonical;
+  throw new Error(
+    `panel model "${canonical}": provider "${provider ?? canonical}" has no credentials this session — ` +
+      "/login, or /review-model to pick a logged-in provider",
+  );
+}
+
 /**
  * Per-session panel model overrides (`/review-model`). Memory-only by design:
  * a new pi process starts empty, so the configured model resumes on the next
