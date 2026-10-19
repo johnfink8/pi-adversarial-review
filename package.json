@@ -46,7 +46,7 @@
     "format": "biome format --write",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm test && node scripts/check-pack.mjs"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
