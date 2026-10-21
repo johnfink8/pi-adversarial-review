@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_MAX_CONCURRENCY } from "../src/config.ts";
 import { discoverModerator, discoverReviewers } from "../src/specs.ts";
 
 const overrideRoot = () => path.join(getAgentDir(), "review-gate");
@@ -29,6 +30,8 @@ describe("bundled specs", () => {
     ]);
     expect(reviewers.every((r) => r.source === "bundled")).toBe(true);
     expect(discoverModerator().source).toBe("bundled");
+    // A sixth bundled spec has to raise DEFAULT_MAX_CONCURRENCY too, or the panel queues.
+    expect(DEFAULT_MAX_CONCURRENCY).toBe(reviewers.length);
   });
 });
 

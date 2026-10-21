@@ -50,7 +50,7 @@ pi install npm:pi-adversarial-review
 
 Every key is optional.
 
-`maxConcurrency` is how many panel members run at once, from 1 to 8. The default is 4. Use 1 for a local endpoint that caches one conversation at a time: concurrent reviewers evict each other's prefix cache, so every one pays a full prefill.
+`maxConcurrency` is how many panel members run at once, from 1 to 8. The default is 5, one slot per bundled reviewer. Use 1 for a local endpoint that caches one conversation at a time: concurrent reviewers evict each other's prefix cache, so every one pays a full prefill.
 
 `model` is the `provider/id` (as `pi --list-models` shows it) that panel members without their own `model:` run on, instead of the session's model. It applies to the moderator too. The session's thinking level is not passed along, since it was set for a different model, and a trailing `:<thinking>` suffix is rejected rather than quietly pinning one — other colons are ordinary id characters, as in `openrouter/google/gemma-4-26b-a4b-it:free`. Changing it invalidates those members' earlier verdicts, the same as editing their specs.
 

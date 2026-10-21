@@ -1,6 +1,6 @@
 {
   "name": "pi-adversarial-review",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An adversarial review gate for the pi coding agent: a panel of reviewer agents must clear the working tree before `git commit` runs.",
   "type": "module",
   "license": "MIT",

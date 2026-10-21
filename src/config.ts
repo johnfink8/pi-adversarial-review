@@ -22,7 +22,7 @@ import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { describeError, isRecord } from "./util.ts";
 
-export const DEFAULT_MAX_CONCURRENCY = 4;
+export const DEFAULT_MAX_CONCURRENCY = 5;
 const MAX_CONCURRENCY_LIMIT = 8;
 const KNOWN_KEYS: readonly (keyof GateConfig)[] = ["maxConcurrency", "model"];
 /** Mirrors pi's own `--model` suffix rule: a valid level is a level, anything else is part of the id. */
